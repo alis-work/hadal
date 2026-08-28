@@ -1,0 +1,115 @@
+# Architecture
+
+## Purpose and Scope
+
+Hadal is a Somali-first translation and transcription platform. The first client is a WhatsApp Business Cloud API bot; a React Native and TypeScript mobile client is a later interface.
+
+The MVP user flows are:
+
+- Somali voice or audio to Somali transcription and English translation.
+- Somali text to English text.
+- English text to Somali text.
+- A photo containing Somali or English text to OCR and translation into the other language.
+
+Documents/PDFs, conversation mode, history, sharing, and audio responses are later features.
+
+## Confirmed Decisions
+
+- Go is the primary language for the API and workers.
+- PostgreSQL stores application metadata and durable results. It must not store uploaded media bytes.
+- Redis supports rate limiting, quotas, and other short-lived coordination or cache needs when introduced.
+- Docker and Docker Compose are the local-development direction.
+- OpenAI APIs are the initial transcription and translation providers. OCR uses a provider behind an abstraction.
+- WhatsApp uses the official WhatsApp Business Cloud API.
+- Python is reserved for future ML-specific workloads, such as PyTorch, Hugging Face, or a custom Somali ASR model. It is separate from the Go application.
+- The system starts as a modular monolith. Workers are separate processes only when asynchronous or independent scaling warrants them.
+- Media processing is asynchronous. Webhook HTTP requests must not wait for transcription or OCR to complete.
+- All paid processing is limited to allowlisted WhatsApp phone numbers and protected by per-user quotas, rate limits, and global cost safeguards.
+- Provider interfaces are required for transcription, translation, and OCR so providers can be replaced and a custom Somali ASR provider can be added.
+- User transcript corrections are retained as potential future evaluation or training data.
+- Structured logging, metrics, and tracing are required operational capabilities.
+
+## System Boundaries
+
+### Go Application
+
+The Go application owns the WhatsApp webhook, sender authorization, synchronous text translation requests, job creation, persistence, provider selection, and outbound WhatsApp replies. Its internal modules should separate transport, application workflow, domain/persistence, and provider adapters without introducing networked services merely for separation.
+
+### Workers
+
+Workers execute durable, long-running media steps outside the webhook request path. Audio transcription, image OCR, and downstream translation are worker responsibilities. Workers persist state transitions and results, then request the Go application's outbound-message capability or otherwise use the same integration boundary.
+
+### Storage
+
+- PostgreSQL: users or sender records, authorization and quota metadata, job metadata and state, provider request/result metadata, transcripts, translations, corrections, and delivery outcomes.
+- Object or file storage: downloaded WhatsApp media and any derived media artifacts. The storage implementation is not selected yet.
+- Redis: enforcement and coordination data with appropriate expiry; it is not the source of truth for durable job state.
+
+### External Providers
+
+- WhatsApp Business Cloud API: webhook delivery, inbound-message metadata/media access, and outbound replies.
+- Transcription provider: OpenAI initially; custom Somali ASR later.
+- Translation provider: OpenAI initially.
+- OCR provider: to be selected.
+
+Provider adapters should normalize provider-specific requests, responses, failures, and usage metadata behind application-facing interfaces. This keeps workflow code independent of a specific vendor and makes cost controls observable.
+
+## Processing Flows
+
+### Text Translation
+
+1. WhatsApp sends an inbound text message to the Go webhook.
+2. The application verifies the webhook and authorizes the sender against the allowlist.
+3. It applies quota, rate-limit, and global safeguard checks before provider use.
+4. The application identifies the requested or detected translation direction, calls the translation provider, persists the result, and replies through WhatsApp.
+
+Text translation may remain synchronous only while its provider call fits the webhook response and reliability constraints. This is a recommendation, not a final implementation decision.
+
+### Voice and Audio
+
+1. WhatsApp sends an inbound media message to the Go webhook.
+2. The application verifies and authorizes the sender, applies cost safeguards, stores media and durable job metadata, and queues transcription work.
+3. A worker transcribes the audio to Somali through the selected provider.
+4. The workflow queues or performs Somali-to-English translation after a successful transcript.
+5. The worker persists the transcript, translation, and state transitions, then sends the reply through WhatsApp.
+
+### Photo OCR
+
+1. The webhook verifies and authorizes the sender, applies safeguards, stores the image, and creates an OCR job.
+2. A worker submits the image to the OCR provider.
+3. The workflow translates the extracted Somali or English text into the other language.
+4. The result and state transitions are persisted before the WhatsApp reply is sent.
+
+## Asynchronous Work and Reliability
+
+Each media workflow needs durable job and event states that make it possible to tell whether intake, media storage, processing, provider calls, result persistence, and reply delivery succeeded. State names and schema are intentionally undecided.
+
+Jobs must support:
+
+- Idempotent intake for webhook redelivery and repeated messages.
+- Safe retries for transient media, provider, queue, and delivery failures.
+- Explicit terminal failures that can be inspected without accidental repeated charges.
+- Upload/media deduplication where appropriate.
+- A record of provider use sufficient to investigate failures and cost safeguards.
+
+Kafka is a future option for asynchronous media-processing workflows when it is justified. It is not required to start the MVP: the queue choice should be made only when the required durability, retry behavior, and operating cost are clear. If Kafka is introduced, event publication must be coordinated with durable state changes to avoid losing or duplicating work.
+
+## Security and Privacy
+
+- Never commit API keys, WhatsApp tokens, database passwords, phone-number allowlists, or other secrets.
+- Configuration uses environment variables or secrets management. `.env.example` contains variable names only.
+- Authorization is evaluated before any paid provider call.
+- Persist only the media, transcripts, translations, and corrections needed for the product and future evaluation goals. Retention and deletion policy are not defined yet.
+
+## Deployment Direction
+
+Initial hosting may use a Raspberry Pi where practical. Docker Compose is the local-development direction. k3s/Kubernetes is a later deployment option, not an MVP prerequisite.
+
+## Recommendations
+
+- Define webhook authentication, WhatsApp signature validation, and outbound-delivery retry behavior before integrating the live WhatsApp account.
+- Choose object/file storage and a durable asynchronous-job mechanism before implementing media workflows.
+- Establish a small end-to-end test fixture set using non-sensitive audio and images before provider integration.
+- Add traces that follow a WhatsApp message through job processing, provider calls, and reply delivery; make provider usage measurable in metrics.
+
+These recommendations are not confirmed product requirements.

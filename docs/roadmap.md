@@ -1,0 +1,75 @@
+# Roadmap
+
+This is an MVP-first implementation plan. Each phase should be completed and verified before expanding scope. Recommendations are labeled as such; unselected providers, storage, queue technology, and deployment details remain open.
+
+## MVP
+
+### 1. Foundation
+
+- Create the Go modular-monolith structure and local Docker Compose development environment.
+- Add PostgreSQL for durable application, job, and result metadata.
+- Add environment-based configuration and `.env.example` with variable names only.
+- Establish structured logging, metrics, and tracing foundations.
+- Define configuration and secret-handling boundaries without committing credentials or allowlists.
+
+### 2. WhatsApp Intake and Protection
+
+- Integrate the official WhatsApp Business Cloud API webhook, including verification and inbound-message handling.
+- Implement allowlisted sender authorization before paid work.
+- Implement per-user quotas, rate limits, and global API-cost safeguards.
+- Persist inbound-message identifiers and use them to make webhook handling idempotent.
+- Send basic non-media replies through WhatsApp to validate the integration boundary.
+
+### 3. Text Translation
+
+- Define a translation-provider interface.
+- Add the initial OpenAI-backed translation adapter.
+- Support Somali-to-English and English-to-Somali WhatsApp text workflows.
+- Persist translation outcomes and provider-use metadata needed for support and safeguards.
+- Verify the full inbound text to outbound reply path.
+
+### 4. Asynchronous Audio Workflow
+
+- Choose and add object/file storage for WhatsApp media; do not store media bytes in PostgreSQL.
+- Choose and add a durable job mechanism appropriate to the initial 5-10-user scale.
+- Define job and event states, retry rules, terminal failures, and idempotency behavior.
+- Define a transcription-provider interface and add the initial OpenAI-backed adapter.
+- Implement Somali audio to Somali transcript, followed by English translation and WhatsApp reply.
+- Add appropriate media deduplication and ensure webhook requests do not wait for processing.
+
+### 5. Image OCR Workflow
+
+- Select an OCR provider and add it behind an OCR-provider interface.
+- Implement image storage, asynchronous OCR, translation into the other language, result persistence, and WhatsApp reply.
+- Apply the same authorization, quota, rate-limit, idempotency, retry, and cost controls as audio processing.
+
+### 6. MVP Hardening
+
+- Exercise retry, duplicate-message, failed-provider, failed-media, and failed-reply paths.
+- Add focused tests for authorization, safeguards, job transitions, and provider adapters.
+- Document local setup and the exact verification commands after tooling exists.
+- Retain transcript corrections in a form usable for future evaluation/training work.
+
+## Later Features
+
+- React Native and TypeScript mobile client for iOS and Android.
+- Documents and PDFs.
+- Conversation mode, history, sharing, and audio responses.
+- User-facing transcript corrections and associated evaluation workflows.
+- A Python ASR worker using PyTorch, Hugging Face, or a custom Somali model, connected through the existing transcription-provider boundary.
+- Evaluation of commercial and custom ASR quality for Somali audio.
+
+## Optional Infrastructure
+
+- Kafka for media-processing events when the chosen durable-job mechanism no longer meets reliability, throughput, integration, or operational needs.
+- Raspberry Pi hosting when it is practical for the required services and workload.
+- k3s/Kubernetes for deployment when operational needs justify orchestration.
+
+## Recommendations
+
+- Start with the smallest durable asynchronous design that satisfies media retries and idempotency for 5-10 users; do not add Kafka simply to demonstrate event-driven architecture.
+- Keep Go workflow logic provider-neutral so OpenAI can be replaced without rewriting user flows.
+- Treat media, provider calls, and outbound WhatsApp delivery as separately observable operations.
+- Define retention, deletion, and correction-consent policies before collecting significant user media or correction data.
+
+These recommendations are not confirmed requirements.

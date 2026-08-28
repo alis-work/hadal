@@ -1,0 +1,43 @@
+# Secrets and local configuration
+.env
+.env.*
+!.env.example
+secrets/
+credentials/
+*.pem
+*.key
+*.p12
+*.pfx
+service-account*.json
+
+# Local data and uploaded media
+data/
+media/
+uploads/
+storage/
+postgres-data/
+redis-data/
+
+# Go
+bin/
+*.test
+coverage.out
+
+# Node / React Native
+node_modules/
+dist/
+build/
+.expo/
+android/local.properties
+ios/Pods/
+
+# Python / ML
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editor and OS files
+.DS_Store
+.idea/
+.vscode/
