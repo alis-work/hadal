@@ -19,9 +19,9 @@ Documents/PDFs, conversation mode, history, sharing, and audio responses are lat
 - PostgreSQL stores application metadata and durable results. It must not store uploaded media bytes.
 - Redis supports rate limiting, quotas, and other short-lived coordination or cache needs when introduced.
 - Docker and Docker Compose are the local-development direction.
-- OpenAI APIs are the initial transcription and translation providers. OCR uses a provider behind an abstraction.
+- The local transcription path uses faster-whisper; translation initially uses OpenAI APIs. OCR uses a provider behind an abstraction.
 - WhatsApp uses the official WhatsApp Business Cloud API.
-- Python is reserved for future ML-specific workloads, such as PyTorch, Hugging Face, or a custom Somali ASR model. It is separate from the Go application.
+- Python ML workloads are separate from the Go application. The initial local audio worker uses faster-whisper with Somali (`so`); it remains behind the worker transcription boundary so a custom Somali ASR model can replace it.
 - The system starts as a modular monolith. Workers are separate processes only when asynchronous or independent scaling warrants them.
 - Media processing is asynchronous. Webhook HTTP requests must not wait for transcription or OCR to complete.
 - All paid processing is limited to allowlisted WhatsApp phone numbers and protected by per-user quotas, rate limits, and global cost safeguards.
@@ -42,15 +42,15 @@ Workers execute durable, long-running media steps outside the webhook request pa
 ### Storage
 
 - PostgreSQL: users or sender records, authorization and quota metadata, job metadata and state, provider request/result metadata, transcripts, translations, corrections, and delivery outcomes.
-- Object or file storage: downloaded WhatsApp media and any derived media artifacts. The storage implementation is not selected yet.
+- Object or file storage: downloaded WhatsApp media and any derived media artifacts. The initial local transcription path uses a configured filesystem directory; PostgreSQL stores only its path and metadata.
 - Redis: enforcement and coordination data with appropriate expiry; it is not the source of truth for durable job state.
 
-The initial schema contains `whatsapp_senders` for normalized sender-phone allowlist policy and `daily_quota_usage` for durable per-sender daily paid-request reservations and completions. No allowlisted phone numbers are stored in versioned SQL. A future application transaction must make a quota reservation atomically before a paid provider call and adjust it after the outcome; Redis may reject short bursts but must not be the sole daily-quota authority.
+The initial schema contains `whatsapp_senders` for normalized sender-phone allowlist policy, a separate international country code, administrator designation, and daily request limits; `NULL` means no per-sender daily limit. `daily_quota_usage` stores durable per-sender daily paid-request reservations and completions. No allowlisted phone numbers are stored in versioned SQL. A future application transaction must make a quota reservation atomically before a paid provider call and adjust it after the outcome; Redis may reject short bursts but must not be the sole daily-quota authority.
 
 ### External Providers
 
 - WhatsApp Business Cloud API: webhook delivery, inbound-message metadata/media access, and outbound replies.
-- Transcription provider: OpenAI initially; custom Somali ASR later.
+- Transcription provider: local faster-whisper initially; custom Somali ASR later.
 - Translation provider: OpenAI initially.
 - OCR provider: to be selected.
 
@@ -84,7 +84,7 @@ Text translation may remain synchronous only while its provider call fits the we
 
 ## Asynchronous Work and Reliability
 
-Each media workflow needs durable job and event states that make it possible to tell whether intake, media storage, processing, provider calls, result persistence, and reply delivery succeeded. State names and schema are intentionally undecided.
+The initial transcription workflow uses `PENDING`, `PROCESSING`, `COMPLETED`, and `FAILED`. PostgreSQL is the durable state source; Redis Streams is a consumer-group queue. Workers atomically claim `PENDING` records, recover abandoned stream messages, and periodically re-enqueue durable pending records.
 
 Jobs must support:
 

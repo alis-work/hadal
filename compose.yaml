@@ -25,7 +25,61 @@ services:
         condition: service_healthy
     volumes:
       - ./db/migrations:/migrations:ro
-    command: ["-path", "/migrations", "-database", "${DATABASE_URL:?DATABASE_URL must be set in .env}", "up"]
+    command: ["-path", "/migrations", "-database", "${COMPOSE_DATABASE_URL:?COMPOSE_DATABASE_URL must be set in .env}", "up"]
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    volumes:
+      - redis-data:/data
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    profiles: ["app"]
+    env_file: [.env]
+    environment:
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:?COMPOSE_DATABASE_URL must be set in .env}
+      REDIS_URL: ${COMPOSE_REDIS_URL:?COMPOSE_REDIS_URL must be set in .env}
+      AUDIO_TEMP_DIR: /data/audio
+      API_ADDR: :8080
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    ports:
+      - "${API_PORT:-8080}:8080"
+    volumes:
+      - audio-data:/data/audio
+
+  worker:
+    build:
+      context: ./worker
+    profiles: ["app"]
+    env_file: [.env]
+    environment:
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:?COMPOSE_DATABASE_URL must be set in .env}
+      REDIS_URL: ${COMPOSE_REDIS_URL:?COMPOSE_REDIS_URL must be set in .env}
+      WHISPER_MODEL: ${WHISPER_MODEL:-small}
+      WHISPER_COMPUTE_TYPE: ${WHISPER_COMPUTE_TYPE:-int8}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - audio-data:/data/audio
 
 volumes:
   postgres-data:
+  redis-data:
+  audio-data:

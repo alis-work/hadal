@@ -1,0 +1,17 @@
+.env
+.git
+.idea
+.vscode
+data
+media
+uploads
+storage
+*.secret.yaml
+*.secret.yml
+*.secrets.yaml
+*.secrets.yml
+secrets.yaml
+secrets.yml
+__pycache__
+.venv
+venv
