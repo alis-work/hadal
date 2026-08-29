@@ -45,6 +45,8 @@ Workers execute durable, long-running media steps outside the webhook request pa
 - Object or file storage: downloaded WhatsApp media and any derived media artifacts. The storage implementation is not selected yet.
 - Redis: enforcement and coordination data with appropriate expiry; it is not the source of truth for durable job state.
 
+The initial schema contains `whatsapp_senders` for normalized sender-phone allowlist policy and `daily_quota_usage` for durable per-sender daily paid-request reservations and completions. No allowlisted phone numbers are stored in versioned SQL. A future application transaction must make a quota reservation atomically before a paid provider call and adjust it after the outcome; Redis may reject short bursts but must not be the sole daily-quota authority.
+
 ### External Providers
 
 - WhatsApp Business Cloud API: webhook delivery, inbound-message metadata/media access, and outbound replies.

@@ -7,8 +7,8 @@ This is an MVP-first implementation plan. Each phase should be completed and ver
 ### 1. Foundation
 
 - Create the Go modular-monolith structure and local Docker Compose development environment.
-- Add PostgreSQL for durable application, job, and result metadata.
-- Add environment-based configuration and `.env.example` with variable names only.
+- Add PostgreSQL for durable application, job, and result metadata. Initial local Compose configuration and allowlist/daily-quota schema are complete.
+- Add environment-based configuration and `.env.example` with variable names only. The initial PostgreSQL template is complete.
 - Establish structured logging, metrics, and tracing foundations.
 - Define configuration and secret-handling boundaries without committing credentials or allowlists.
 
