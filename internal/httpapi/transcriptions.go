@@ -22,14 +22,16 @@ type createResponse struct {
 	Status string    `json:"status"`
 }
 type transcriptionResponse struct {
-	ID           uuid.UUID  `json:"id"`
-	Status       string     `json:"status"`
-	Language     string     `json:"language"`
-	Text         *string    `json:"text,omitempty"`
-	Error        *string    `json:"error,omitempty"`
-	CreatedAt    time.Time  `json:"createdAt"`
-	ProcessingAt *time.Time `json:"processingAt,omitempty"`
-	CompletedAt  *time.Time `json:"completedAt,omitempty"`
+	ID             uuid.UUID  `json:"id"`
+	Status         string     `json:"status"`
+	Language       *string    `json:"language,omitempty"`
+	TargetLanguage *string    `json:"targetLanguage,omitempty"`
+	Transcript     *string    `json:"transcript,omitempty"`
+	Text           *string    `json:"text,omitempty"`
+	Error          *string    `json:"error,omitempty"`
+	CreatedAt      time.Time  `json:"createdAt"`
+	ProcessingAt   *time.Time `json:"processingAt,omitempty"`
+	CompletedAt    *time.Time `json:"completedAt,omitempty"`
 }
 
 func NewHandler(service *transcription.Service, logger *slog.Logger, maxUploadBytes int64) *Handler {
@@ -89,7 +91,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, responseFromRecord(item))
 }
 func responseFromRecord(item transcription.Record) transcriptionResponse {
-	return transcriptionResponse{ID: item.ID, Status: item.Status, Language: item.Language, Text: item.Transcript, Error: item.FailureReason, CreatedAt: item.CreatedAt, ProcessingAt: item.ProcessingAt, CompletedAt: item.CompletedAt}
+	return transcriptionResponse{ID: item.ID, Status: item.Status, Language: item.DetectedLanguage, TargetLanguage: item.TargetLanguage, Transcript: item.Transcript, Text: item.TranslatedText, Error: item.FailureReason, CreatedAt: item.CreatedAt, ProcessingAt: item.ProcessingAt, CompletedAt: item.CompletedAt}
 }
 func writeJSON(w http.ResponseWriter, status int, value any) {
 	w.Header().Set("Content-Type", "application/json")

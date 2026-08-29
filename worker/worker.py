@@ -1,10 +1,13 @@
 """Redis Streams transcription worker. It never logs audio or transcript contents."""
 import logging
+import json
+import mimetypes
 import os
 import socket
 import time
 from dataclasses import dataclass
 from typing import Protocol
+from urllib import error, request
 
 
 STREAM = "transcription-jobs"
@@ -19,7 +22,7 @@ class Job:
 
 class Repository(Protocol):
     def claim(self, transcription_id: str) -> Job | None: ...
-    def complete(self, transcription_id: str, transcript: str) -> None: ...
+    def complete(self, transcription_id: str, transcript: str, detected_language: str, target_language: str, translated_text: str) -> None: ...
     def fail(self, transcription_id: str, reason: str) -> None: ...
     def pending_ids(self) -> list[str]: ...
     def recover_stalled(self) -> None: ...
@@ -27,6 +30,17 @@ class Repository(Protocol):
 
 class Transcriber(Protocol):
     def transcribe(self, path: str) -> str: ...
+
+
+class Translator(Protocol):
+    def translate(self, text: str) -> "TranslationResult": ...
+
+
+@dataclass
+class TranslationResult:
+    source_language: str
+    target_language: str
+    translated_text: str
 
 
 class PostgresRepository:
@@ -47,13 +61,14 @@ class PostgresRepository:
         self.connection.commit()
         return Job(*row) if row else None
 
-    def complete(self, transcription_id: str, transcript: str) -> None:
+    def complete(self, transcription_id: str, transcript: str, detected_language: str, target_language: str, translated_text: str) -> None:
         with self.connection.cursor() as cursor:
             cursor.execute(
-                """UPDATE transcriptions SET status = 'COMPLETED', transcript = %s,
+                """UPDATE transcriptions SET status = 'COMPLETED', transcript = %s, detected_language = %s,
+                   target_language = %s, translated_text = %s,
                    completed_at = NOW(), updated_at = NOW()
                    WHERE id = %s AND status = 'PROCESSING'""",
-                (transcript, transcription_id),
+                (transcript, detected_language, target_language, translated_text, transcription_id),
             )
         self.connection.commit()
 
@@ -70,6 +85,7 @@ class PostgresRepository:
         with self.connection.cursor() as cursor:
             cursor.execute("SELECT id::text FROM transcriptions WHERE status = 'PENDING' ORDER BY created_at")
             rows = cursor.fetchall()
+        self.connection.commit()
         return [row[0] for row in rows]
 
     def recover_stalled(self) -> None:
@@ -83,22 +99,102 @@ class PostgresRepository:
         self.connection.commit()
 
 
-class FasterWhisperTranscriber:
-    def __init__(self, model_name: str, compute_type: str):
-        from faster_whisper import WhisperModel
-
-        self.model = WhisperModel(model_name, compute_type=compute_type)
+class OpenAITranscriber:
+    def __init__(self, api_key: str, model: str, opener=None):
+        self.api_key = api_key
+        self.model = model
+        self.opener = opener or request.urlopen
 
     def transcribe(self, path: str) -> str:
-        segments, _ = self.model.transcribe(path, language="so", task="transcribe")
-        return " ".join(segment.text.strip() for segment in segments).strip()
+        boundary = "----hadal-" + os.urandom(16).hex()
+        filename = os.path.basename(path)
+        content_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        try:
+            with open(path, "rb") as audio:
+                audio_data = audio.read()
+            body = (
+                f"--{boundary}\r\n"
+                "Content-Disposition: form-data; name=\"model\"\r\n\r\n"
+                f"{self.model}\r\n"
+                f"--{boundary}\r\n"
+                f"Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n"
+                f"Content-Type: {content_type}\r\n\r\n"
+            ).encode() + audio_data + f"\r\n--{boundary}--\r\n".encode()
+            http_request = request.Request(
+                "https://api.openai.com/v1/audio/transcriptions",
+                data=body,
+                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": f"multipart/form-data; boundary={boundary}"},
+                method="POST",
+            )
+            with self.opener(http_request, timeout=30) as response:
+                text = json.loads(response.read())["text"]
+            if not isinstance(text, str) or not text.strip():
+                raise ValueError
+            return text.strip()
+        except (OSError, error.URLError, error.HTTPError, KeyError, TypeError, ValueError, json.JSONDecodeError):
+            raise RuntimeError("OpenAI transcription request failed") from None
+
+
+class OpenAITranslator:
+    def __init__(self, api_key: str, model: str, opener=None):
+        self.api_key = api_key
+        self.model = model
+        self.opener = opener or request.urlopen
+
+    def translate(self, text: str) -> TranslationResult:
+        body = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": "Detect whether the source text is Somali or English and translate it into the other language. Return only JSON matching the requested schema. source_language and target_language must be so or en, and must be opposite languages."},
+                {"role": "user", "content": text},
+            ],
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "translation_result",
+                    "strict": True,
+                    "schema": {
+                        "type": "object",
+                        "properties": {
+                            "source_language": {"type": "string", "enum": ["so", "en"]},
+                            "target_language": {"type": "string", "enum": ["so", "en"]},
+                            "translated_text": {"type": "string"},
+                        },
+                        "required": ["source_language", "target_language", "translated_text"],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+        }
+        try:
+            payload = json.dumps(body).encode()
+            http_request = request.Request(
+                "https://api.openai.com/v1/chat/completions",
+                data=payload,
+                headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"},
+                method="POST",
+            )
+            with self.opener(http_request, timeout=30) as response:
+                content = json.loads(response.read())["choices"][0]["message"]["content"]
+            result = json.loads(content)
+            if set(result) != {"source_language", "target_language", "translated_text"}:
+                raise ValueError
+            source_language = result["source_language"]
+            target_language = result["target_language"]
+            translated_text = result["translated_text"]
+            if (source_language, target_language) not in {("so", "en"), ("en", "so")} or not isinstance(translated_text, str) or not translated_text.strip():
+                raise ValueError
+            return TranslationResult(source_language, target_language, translated_text.strip())
+        except (error.URLError, error.HTTPError, KeyError, TypeError, ValueError, IndexError, json.JSONDecodeError):
+            raise RuntimeError("OpenAI translation request failed") from None
 
 
 class Worker:
-    def __init__(self, repository: Repository, client, transcriber: Transcriber, consumer: str, reclaim_idle_ms: int = 3_600_000):
+    def __init__(self, repository: Repository, client, transcriber: Transcriber, translator: Translator, consumer: str, reclaim_idle_ms: int = 3_600_000):
         self.repository = repository
         self.client = client
         self.transcriber = transcriber
+        self.translator = translator
         self.consumer = consumer
         self.reclaim_idle_ms = reclaim_idle_ms
 
@@ -117,22 +213,28 @@ class Worker:
         try:
             transcript = self.transcriber.transcribe(job.storage_path)
             if not transcript:
-                raise RuntimeError("transcriber returned an empty transcript")
-            self.repository.complete(job.id, transcript)
+                raise RuntimeError("empty transcript")
+            result = self.translator.translate(transcript)
+            if (result.source_language, result.target_language) not in {("so", "en"), ("en", "so")}:
+                raise ValueError("unsupported detected language")
+            if not result.translated_text:
+                raise RuntimeError("empty translation")
+            self.repository.complete(job.id, transcript, result.source_language, result.target_language, result.translated_text)
             try:
                 os.remove(job.storage_path)
             except FileNotFoundError:
                 pass
             except OSError:
-                logging.exception("could not delete completed audio", extra={"transcription_id": job.id})
+                logging.error("could not delete completed audio", extra={"transcription_id": job.id})
             logging.info("transcription completed", extra={"transcription_id": job.id, "duration_ms": round((time.monotonic() - started) * 1000)})
         except Exception as error:
+            reason = "unsupported detected language" if isinstance(error, ValueError) and str(error) == "unsupported detected language" else "audio processing failed"
             try:
-                self.repository.fail(job.id, str(error))
-                logging.exception("transcription failed", extra={"transcription_id": job.id, "duration_ms": round((time.monotonic() - started) * 1000)})
+                self.repository.fail(job.id, reason)
+                logging.error("audio processing failed", extra={"transcription_id": job.id, "duration_ms": round((time.monotonic() - started) * 1000)})
             except Exception:
                 # Leave this Streams message pending when durable failure state cannot be saved.
-                logging.exception("could not persist transcription failure", extra={"transcription_id": job.id})
+                logging.error("could not persist audio processing failure", extra={"transcription_id": job.id})
                 return
         self.client.xack(STREAM, GROUP, message_id)
 
@@ -169,10 +271,13 @@ def main() -> None:
     database_url = os.environ["DATABASE_URL"]
     redis_url = os.environ["REDIS_URL"]
     consumer = os.getenv("WORKER_CONSUMER", socket.gethostname())
-    model = os.getenv("WHISPER_MODEL", "small")
-    compute_type = os.getenv("WHISPER_COMPUTE_TYPE", "int8")
     stale_after_seconds = int(os.getenv("PROCESSING_STALE_AFTER_SECONDS", "3600"))
-    Worker(PostgresRepository(database_url, stale_after_seconds), redis.Redis.from_url(redis_url, decode_responses=True), FasterWhisperTranscriber(model, compute_type), consumer, stale_after_seconds * 1000).run()
+    api_key = os.getenv("OPENAI_API_KEY")
+    if not api_key:
+        raise RuntimeError("OPENAI_API_KEY must be set for the worker to start")
+    transcriber = OpenAITranscriber(api_key, os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-transcribe"))
+    translator = OpenAITranslator(api_key, os.getenv("OPENAI_TRANSLATION_MODEL", "gpt-4o-mini"))
+    Worker(PostgresRepository(database_url, stale_after_seconds), redis.Redis.from_url(redis_url, decode_responses=True), transcriber, translator, consumer, stale_after_seconds * 1000).run()
 
 
 if __name__ == "__main__":

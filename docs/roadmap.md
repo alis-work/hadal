@@ -33,8 +33,8 @@ This is an MVP-first implementation plan. Each phase should be completed and ver
 - Choose and add object/file storage for WhatsApp media; do not store media bytes in PostgreSQL.
 - Choose and add a durable job mechanism appropriate to the initial 5-10-user scale.
 - Define job and event states, retry rules, terminal failures, and idempotency behavior.
-- Define a transcription-provider interface and add the initial local faster-whisper adapter.
-- Implement Somali audio to Somali transcript, followed by English translation and WhatsApp reply.
+- Define a transcription-provider interface and add the initial OpenAI audio-transcription adapter.
+- Implement OpenAI audio auto-detection without a language hint, preserve the source transcript, and use a separate strict structured OpenAI text response to classify Somali/English and translate into the opposite language before the WhatsApp text reply.
 - Add appropriate media deduplication and ensure webhook requests do not wait for processing.
 
 ### 5. Image OCR Workflow

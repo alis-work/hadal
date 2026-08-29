@@ -1,50 +1,163 @@
+import json
+import os
+import tempfile
 import unittest
 
-from worker.worker import GROUP, STREAM, Job, Worker
+from worker.worker import GROUP, STREAM, Job, OpenAITranscriber, OpenAITranslator, TranslationResult, Worker
 
 
 class Repository:
-    def __init__(self, job, status="PENDING"): self.job = job; self.status = status; self.completed = []; self.failed = []
+    def __init__(self, job, status="PENDING"):
+        self.job = job
+        self.status = status
+        self.completed = []
+        self.failed = []
+
     def claim(self, _):
-        if self.status != "PENDING": return None
+        if self.status != "PENDING":
+            return None
         self.status = "PROCESSING"
         return self.job
-    def complete(self, job_id, transcript): self.completed.append((job_id, transcript)); self.status = "COMPLETED"
-    def fail(self, job_id, reason): self.failed.append((job_id, reason)); self.status = "FAILED"
-    def pending_ids(self): return []
-    def recover_stalled(self): pass
+
+    def complete(self, job_id, transcript, detected_language, target_language, translated_text):
+        self.completed.append((job_id, transcript, detected_language, target_language, translated_text))
+        self.status = "COMPLETED"
+
+    def fail(self, job_id, reason):
+        self.failed.append((job_id, reason))
+        self.status = "FAILED"
+
+    def pending_ids(self):
+        return []
+
+    def recover_stalled(self):
+        pass
 
 
 class Client:
-    def __init__(self): self.acks = []
-    def xack(self, stream, group, message): self.acks.append((stream, group, message))
+    def __init__(self):
+        self.acks = []
+
+    def xack(self, stream, group, message):
+        self.acks.append((stream, group, message))
 
 
 class Transcriber:
-    def __init__(self, result=None, error=None): self.result = result; self.error = error
+    def __init__(self, transcript=None, error=None):
+        self.transcript = transcript
+        self.error = error
+
     def transcribe(self, _):
-        if self.error: raise self.error
+        if self.error:
+            raise self.error
+        return self.transcript
+
+
+class Translator:
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+        self.calls = []
+
+    def translate(self, text):
+        self.calls.append(text)
+        if self.error:
+            raise self.error
         return self.result
 
 
 class WorkerTests(unittest.TestCase):
-    def test_success_completes_and_acknowledges(self):
+    def test_somali_classification_completes_with_english_translation(self):
         repo, client = Repository(Job("job-1", "/audio")), Client()
-        Worker(repo, client, Transcriber("qoraal"), "test").process("1-0", {"transcription_id": "job-1"})
-        self.assertEqual(repo.completed, [("job-1", "qoraal")])
+        translator = Translator(TranslationResult("so", "en", "Hello"))
+        Worker(repo, client, Transcriber("Salaan"), translator, "test").process("1-0", {"transcription_id": "job-1"})
+        self.assertEqual(repo.completed, [("job-1", "Salaan", "so", "en", "Hello")])
+        self.assertEqual(translator.calls, ["Salaan"])
         self.assertEqual(repo.status, "COMPLETED")
         self.assertEqual(client.acks, [(STREAM, GROUP, "1-0")])
 
-    def test_failure_is_persisted_and_acknowledged(self):
+    def test_english_classification_completes_with_somali_translation(self):
         repo, client = Repository(Job("job-1", "/audio")), Client()
-        Worker(repo, client, Transcriber(error=RuntimeError("model failed")), "test").process("1-0", {"transcription_id": "job-1"})
-        self.assertEqual(repo.failed, [("job-1", "model failed")])
+        translator = Translator(TranslationResult("en", "so", "Salaan"))
+        Worker(repo, client, Transcriber("Hello"), translator, "test").process("1-0", {"transcription_id": "job-1"})
+        self.assertEqual(repo.completed, [("job-1", "Hello", "en", "so", "Salaan")])
+        self.assertEqual(translator.calls, ["Hello"])
+
+    def test_failure_is_persisted_without_provider_error(self):
+        repo, client = Repository(Job("job-1", "/audio")), Client()
+        Worker(repo, client, Transcriber(error=RuntimeError("sensitive provider detail")), Translator(), "test").process("1-0", {"transcription_id": "job-1"})
+        self.assertEqual(repo.failed, [("job-1", "audio processing failed")])
         self.assertEqual(repo.status, "FAILED")
+        self.assertEqual(client.acks, [(STREAM, GROUP, "1-0")])
+
+    def test_unsupported_translation_classification_fails(self):
+        repo, client = Repository(Job("job-1", "/audio")), Client()
+        Worker(repo, client, Transcriber("Bonjour"), Translator(TranslationResult("fr", "en", "Hello")), "test").process("1-0", {"transcription_id": "job-1"})
+        self.assertEqual(repo.failed, [("job-1", "unsupported detected language")])
         self.assertEqual(client.acks, [(STREAM, GROUP, "1-0")])
 
     def test_completed_duplicate_is_safe_noop(self):
         repo, client = Repository(None, status="COMPLETED"), Client()
-        Worker(repo, client, Transcriber("ignored"), "test").process("1-0", {"transcription_id": "job-1"})
+        Worker(repo, client, Transcriber("ignored"), Translator(TranslationResult("so", "en", "ignored")), "test").process("1-0", {"transcription_id": "job-1"})
         self.assertEqual(repo.completed, [])
         self.assertEqual(repo.status, "COMPLETED")
         self.assertEqual(client.acks, [(STREAM, GROUP, "1-0")])
+
+
+class OpenAIClientTests(unittest.TestCase):
+    class Response:
+        def __init__(self, body):
+            self.body = body
+
+        def read(self):
+            return self.body
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+    def test_transcriber_posts_multipart_without_language(self):
+        requests = []
+
+        def opener(http_request, timeout):
+            requests.append((http_request, timeout))
+            return self.Response(b'{"text":"Salaan"}')
+
+        with tempfile.NamedTemporaryFile(suffix=".m4a") as audio:
+            audio.write(b"audio-bytes")
+            audio.flush()
+            self.assertEqual(OpenAITranscriber("test-key", "test-model", opener).transcribe(audio.name), "Salaan")
+            filename = os.path.basename(audio.name).encode()
+        http_request, timeout = requests[0]
+        self.assertEqual(timeout, 30)
+        self.assertEqual(http_request.full_url, "https://api.openai.com/v1/audio/transcriptions")
+        self.assertEqual(http_request.get_header("Authorization"), "Bearer test-key")
+        self.assertIn(b'name="model"\r\n\r\ntest-model', http_request.data)
+        self.assertIn(b'filename="' + filename + b'"', http_request.data)
+        self.assertNotIn(b'name="language"', http_request.data)
+
+    def test_translator_posts_structured_request_and_parses_result(self):
+        requests = []
+
+        def opener(http_request, timeout):
+            requests.append((http_request, timeout))
+            return self.Response(b'{"choices":[{"message":{"content":"{\\"source_language\\":\\"so\\",\\"target_language\\":\\"en\\",\\"translated_text\\":\\"Hello\\"}"}}]}')
+
+        result = OpenAITranslator("test-key", "test-model", opener).translate("Salaan")
+        self.assertEqual(result, TranslationResult("so", "en", "Hello"))
+        http_request, timeout = requests[0]
+        self.assertEqual(timeout, 30)
+        self.assertEqual(http_request.full_url, "https://api.openai.com/v1/chat/completions")
+        self.assertEqual(http_request.get_header("Authorization"), "Bearer test-key")
+        body = json.loads(http_request.data)
+        self.assertEqual(body["model"], "test-model")
+        self.assertTrue(body["response_format"]["json_schema"]["strict"])
+
+    def test_translator_rejects_non_opposite_language_pair(self):
+        def opener(_, timeout):
+            return self.Response(b'{"choices":[{"message":{"content":"{\\"source_language\\":\\"so\\",\\"target_language\\":\\"so\\",\\"translated_text\\":\\"Salaan\\"}"}}]}')
+
+        with self.assertRaisesRegex(RuntimeError, "OpenAI translation request failed"):
+            OpenAITranslator("test-key", "test-model", opener).translate("Salaan")

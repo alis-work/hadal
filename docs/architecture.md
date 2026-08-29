@@ -6,7 +6,7 @@ Hadal is a Somali-first translation and transcription platform. The first client
 
 The MVP user flows are:
 
-- Somali voice or audio to Somali transcription and English translation.
+- Somali or English voice or audio to an OpenAI auto-detected source transcript and text translation into the other language.
 - Somali text to English text.
 - English text to Somali text.
 - A photo containing Somali or English text to OCR and translation into the other language.
@@ -19,9 +19,9 @@ Documents/PDFs, conversation mode, history, sharing, and audio responses are lat
 - PostgreSQL stores application metadata and durable results. It must not store uploaded media bytes.
 - Redis supports rate limiting, quotas, and other short-lived coordination or cache needs when introduced.
 - Docker and Docker Compose are the local-development direction.
-- The local transcription path uses faster-whisper; translation initially uses OpenAI APIs. OCR uses a provider behind an abstraction.
+- The initial transcription and translation paths use separate OpenAI API calls. OpenAI transcription auto-detects the audio language; a structured OpenAI translation response identifies Somali (`so`) or English (`en`) and translates to the opposite language. OCR uses a provider behind an abstraction.
 - WhatsApp uses the official WhatsApp Business Cloud API.
-- Python ML workloads are separate from the Go application. The initial local audio worker uses faster-whisper with Somali (`so`); it remains behind the worker transcription boundary so a custom Somali ASR model can replace it.
+- The Python audio queue worker is separate from the Go application. It submits audio to OpenAI transcription without a language hint, then submits the source transcript in a separate OpenAI text request. The structured translation response determines Somali (`so`) or English (`en`) and the opposite target language; unsupported languages fail. The worker remains behind the transcription boundary so a custom Somali ASR model can replace it.
 - The system starts as a modular monolith. Workers are separate processes only when asynchronous or independent scaling warrants them.
 - Media processing is asynchronous. Webhook HTTP requests must not wait for transcription or OCR to complete.
 - All paid processing is limited to allowlisted WhatsApp phone numbers and protected by per-user quotas, rate limits, and global cost safeguards.
@@ -42,7 +42,7 @@ Workers execute durable, long-running media steps outside the webhook request pa
 ### Storage
 
 - PostgreSQL: users or sender records, authorization and quota metadata, job metadata and state, provider request/result metadata, transcripts, translations, corrections, and delivery outcomes.
-- Object or file storage: downloaded WhatsApp media and any derived media artifacts. The initial local transcription path uses a configured filesystem directory; PostgreSQL stores only its path and metadata.
+- Object or file storage: downloaded WhatsApp media and any derived media artifacts. The initial audio path uses a configured filesystem directory; PostgreSQL stores only its path and metadata.
 - Redis: enforcement and coordination data with appropriate expiry; it is not the source of truth for durable job state.
 
 The initial schema contains `whatsapp_senders` for normalized sender-phone allowlist policy, a separate international country code, administrator designation, and daily request limits; `NULL` means no per-sender daily limit. `daily_quota_usage` stores durable per-sender daily paid-request reservations and completions. No allowlisted phone numbers are stored in versioned SQL. A future application transaction must make a quota reservation atomically before a paid provider call and adjust it after the outcome; Redis may reject short bursts but must not be the sole daily-quota authority.
@@ -50,8 +50,8 @@ The initial schema contains `whatsapp_senders` for normalized sender-phone allow
 ### External Providers
 
 - WhatsApp Business Cloud API: webhook delivery, inbound-message metadata/media access, and outbound replies.
-- Transcription provider: local faster-whisper initially; custom Somali ASR later.
-- Translation provider: OpenAI initially.
+- Transcription provider: OpenAI initially; custom Somali ASR later.
+- Translation and language-classification provider: OpenAI initially.
 - OCR provider: to be selected.
 
 Provider adapters should normalize provider-specific requests, responses, failures, and usage metadata behind application-facing interfaces. This keeps workflow code independent of a specific vendor and makes cost controls observable.
@@ -71,9 +71,9 @@ Text translation may remain synchronous only while its provider call fits the we
 
 1. WhatsApp sends an inbound media message to the Go webhook.
 2. The application verifies and authorizes the sender, applies cost safeguards, stores media and durable job metadata, and queues transcription work.
-3. A worker transcribes the audio to Somali through the selected provider.
-4. The workflow queues or performs Somali-to-English translation after a successful transcript.
-5. The worker persists the transcript, translation, and state transitions, then sends the reply through WhatsApp.
+3. A worker sends audio to OpenAI transcription without a language hint and receives the source transcript.
+4. The worker sends that transcript in a separate OpenAI text request. Its strict structured response identifies Somali or English, selects the opposite target language, and supplies the translation; other languages fail.
+5. The worker persists the source transcript, detected and target languages, translated text, and state transitions, then sends the text reply through WhatsApp.
 
 ### Photo OCR
 

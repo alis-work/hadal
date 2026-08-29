@@ -24,6 +24,9 @@ type Record struct {
 	Language         string     `json:"language"`
 	Status           string     `json:"status"`
 	Transcript       *string    `json:"transcript,omitempty"`
+	DetectedLanguage *string    `json:"detected_language,omitempty"`
+	TargetLanguage   *string    `json:"target_language,omitempty"`
+	TranslatedText   *string    `json:"translated_text,omitempty"`
 	FailureReason    *string    `json:"failure_reason,omitempty"`
 	CreatedAt        time.Time  `json:"created_at"`
 	UpdatedAt        time.Time  `json:"updated_at"`
