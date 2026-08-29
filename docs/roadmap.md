@@ -49,6 +49,8 @@ This is an MVP-first implementation plan. Each phase should be completed and ver
 - Add focused tests for authorization, safeguards, job transitions, and provider adapters.
 - Document local setup and the exact verification commands after tooling exists.
 - Retain transcript corrections in a form usable for future evaluation/training work.
+- Version Dockerfiles, publish the application image to Docker Hub, and deploy it to the Ubuntu Raspberry Pi through k3s.
+- Keep Kubernetes Secret values in an ignored runtime secret file or other secrets-management mechanism; version only manifests that reference those Secrets.
 
 ## Later Features
 
@@ -62,8 +64,6 @@ This is an MVP-first implementation plan. Each phase should be completed and ver
 ## Optional Infrastructure
 
 - Kafka for media-processing events when the chosen durable-job mechanism no longer meets reliability, throughput, integration, or operational needs.
-- Raspberry Pi hosting when it is practical for the required services and workload.
-- k3s/Kubernetes for deployment when operational needs justify orchestration.
 
 ## Recommendations
 

@@ -6,5 +6,6 @@
 - Use provider abstractions for transcription, translation, and OCR. Do not reduce the product to a thin OpenAI wrapper; a custom Somali ASR provider must be possible later.
 - Store media outside PostgreSQL. Design job/event state, retries, idempotency, and upload deduplication. Preserve user transcript corrections as possible future evaluation/training data.
 - Only allowlisted WhatsApp senders may incur paid processing. Enforce per-user quotas, rate limiting, and global cost safeguards.
-- Never commit secrets, tokens, credentials, or phone-number allowlists. When configuration is introduced, commit `.env.example` with variable names only.
+- Version Dockerfiles and deployment manifests, publish container images to Docker Hub, and deploy them to the Ubuntu Raspberry Pi with k3s. Kubernetes manifests must reference secrets without containing secret values.
+- Never commit secrets, tokens, credentials, or phone-number allowlists. Keep runtime secret files ignored; when configuration is introduced, commit `.env.example` with variable names only.
 - Read `docs/architecture.md` before changing system design and `docs/roadmap.md` before expanding scope. Keep MVP, later features, and optional infrastructure distinct.

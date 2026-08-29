@@ -9,6 +9,12 @@ credentials/
 *.p12
 *.pfx
 service-account*.json
+*.secret.yaml
+*.secret.yml
+*.secrets.yaml
+*.secrets.yml
+secrets.yaml
+secrets.yml
 
 # Local data and uploaded media
 data/

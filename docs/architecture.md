@@ -98,12 +98,15 @@ Kafka is a future option for asynchronous media-processing workflows when it is 
 
 - Never commit API keys, WhatsApp tokens, database passwords, phone-number allowlists, or other secrets.
 - Configuration uses environment variables or secrets management. `.env.example` contains variable names only.
+- Runtime secret files, including Kubernetes Secret value manifests, stay outside Git. Versioned Kubernetes manifests may reference a Secret by name but must not embed its values.
 - Authorization is evaluated before any paid provider call.
 - Persist only the media, transcripts, translations, and corrections needed for the product and future evaluation goals. Retention and deletion policy are not defined yet.
 
 ## Deployment Direction
 
-Initial hosting may use a Raspberry Pi where practical. Docker Compose is the local-development direction. k3s/Kubernetes is a later deployment option, not an MVP prerequisite.
+Dockerfiles are versioned in this repository and used to build container images published to Docker Hub. The Ubuntu Raspberry Pi pulls those images, and k3s manages deployments. Docker Compose remains the local-development direction.
+
+The deployment manifests should specify the Docker Hub image and reference externally supplied Kubernetes Secrets. Secret values must not be baked into images, committed in manifests, or supplied as versioned build arguments.
 
 ## Recommendations
 
