@@ -15,8 +15,9 @@ This is an MVP-first implementation plan. Each phase should be completed and ver
 ### 2. WhatsApp Intake and Protection
 
 - Integrate the official WhatsApp Business Cloud API webhook, including verification and inbound-message handling.
+- Bind four-digit registration-code redemption to the verified WhatsApp sender. The pre-WhatsApp development API uses a temporary required `X-Hadal-Sender` E.164 shim, which must be replaced by verified webhook identity. The code values remain runtime secrets.
 - Implement allowlisted sender authorization before paid work.
-- Implement per-user quotas, rate limits, and global API-cost safeguards.
+- Enforce permitted-user 30-second/10-per-day policy and recruiter 10-second/three-lifetime-then-disabled policy atomically before paid work.
 - Persist inbound-message identifiers and use them to make webhook handling idempotent.
 - Send basic non-media replies through WhatsApp to validate the integration boundary.
 
@@ -34,7 +35,7 @@ This is an MVP-first implementation plan. Each phase should be completed and ver
 - Choose and add a durable job mechanism appropriate to the initial 5-10-user scale.
 - Define job and event states, retry rules, terminal failures, and idempotency behavior.
 - Define a transcription-provider interface and add the initial OpenAI audio-transcription adapter.
-- Implement OpenAI audio auto-detection without a language hint, preserve the source transcript, and use a separate strict structured OpenAI text response to classify Somali/English and translate into the opposite language before the WhatsApp text reply.
+- Implement OpenAI audio auto-detection without a language hint, preserve the source transcript, and use separate strict structured OpenAI calls to classify/translate Somali/English into the opposite language and sanity-check the proposed translation before the WhatsApp text reply.
 - Add appropriate media deduplication and ensure webhook requests do not wait for processing.
 
 ### 5. Image OCR Workflow

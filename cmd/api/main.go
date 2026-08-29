@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/alimohamed/hadal/internal/access"
 	"github.com/alimohamed/hadal/internal/httpapi"
 	"github.com/alimohamed/hadal/internal/transcription"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -41,8 +42,9 @@ func main() {
 		logger.Error("redis connection failed", "error", err)
 		os.Exit(1)
 	}
-	service := transcription.NewService(transcription.NewPostgresRepository(pool), transcription.NewRedisQueue(client), transcription.FileStorage{Directory: directory})
-	handler := httpapi.NewHandler(service, logger, maxMB*1024*1024)
+	senders := access.NewPostgresRepository(pool)
+	service := transcription.NewService(transcription.NewPostgresRepository(pool), transcription.NewRedisQueue(client), transcription.FileStorage{Directory: directory}, transcription.FFProbe{}, senders)
+	handler := httpapi.NewHandler(service, logger, maxMB*1024*1024, senders, access.RegistrationCodesFromEnvironment(), transcription.NewRedisRateLimiter(client))
 	server := &http.Server{Addr: address, Handler: handler.Routes(), ReadHeaderTimeout: 5 * time.Second}
 	logger.Info("api listening", "address", address)
 	if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {

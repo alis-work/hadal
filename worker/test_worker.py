@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 
-from worker.worker import GROUP, STREAM, Job, OpenAITranscriber, OpenAITranslator, TranslationResult, Worker
+from worker.worker import GROUP, STREAM, Job, OpenAITranscriber, OpenAITranslator, OpenAIValidator, TranslationResult, ValidationResult, Worker
 
 
 class Repository:
@@ -66,11 +66,22 @@ class Translator:
         return self.result
 
 
+class Validator:
+    def __init__(self, result=None, error=None):
+        self.result = result
+        self.error = error
+
+    def validate(self, transcript, translation):
+        if self.error:
+            raise self.error
+        return self.result
+
+
 class WorkerTests(unittest.TestCase):
     def test_somali_classification_completes_with_english_translation(self):
         repo, client = Repository(Job("job-1", "/audio")), Client()
         translator = Translator(TranslationResult("so", "en", "Hello"))
-        Worker(repo, client, Transcriber("Salaan"), translator, "test").process("1-0", {"transcription_id": "job-1"})
+        Worker(repo, client, Transcriber("Salaan"), translator, Validator(ValidationResult(True)), "test").process("1-0", {"transcription_id": "job-1"})
         self.assertEqual(repo.completed, [("job-1", "Salaan", "so", "en", "Hello")])
         self.assertEqual(translator.calls, ["Salaan"])
         self.assertEqual(repo.status, "COMPLETED")
@@ -79,29 +90,39 @@ class WorkerTests(unittest.TestCase):
     def test_english_classification_completes_with_somali_translation(self):
         repo, client = Repository(Job("job-1", "/audio")), Client()
         translator = Translator(TranslationResult("en", "so", "Salaan"))
-        Worker(repo, client, Transcriber("Hello"), translator, "test").process("1-0", {"transcription_id": "job-1"})
+        Worker(repo, client, Transcriber("Hello"), translator, Validator(ValidationResult(True)), "test").process("1-0", {"transcription_id": "job-1"})
         self.assertEqual(repo.completed, [("job-1", "Hello", "en", "so", "Salaan")])
         self.assertEqual(translator.calls, ["Hello"])
 
     def test_failure_is_persisted_without_provider_error(self):
         repo, client = Repository(Job("job-1", "/audio")), Client()
-        Worker(repo, client, Transcriber(error=RuntimeError("sensitive provider detail")), Translator(), "test").process("1-0", {"transcription_id": "job-1"})
+        Worker(repo, client, Transcriber(error=RuntimeError("sensitive provider detail")), Translator(), Validator(), "test").process("1-0", {"transcription_id": "job-1"})
         self.assertEqual(repo.failed, [("job-1", "audio processing failed")])
         self.assertEqual(repo.status, "FAILED")
         self.assertEqual(client.acks, [(STREAM, GROUP, "1-0")])
 
     def test_unsupported_translation_classification_fails(self):
         repo, client = Repository(Job("job-1", "/audio")), Client()
-        Worker(repo, client, Transcriber("Bonjour"), Translator(TranslationResult("fr", "en", "Hello")), "test").process("1-0", {"transcription_id": "job-1"})
+        Worker(repo, client, Transcriber("Bonjour"), Translator(TranslationResult("fr", "en", "Hello")), Validator(ValidationResult(True)), "test").process("1-0", {"transcription_id": "job-1"})
         self.assertEqual(repo.failed, [("job-1", "unsupported detected language")])
         self.assertEqual(client.acks, [(STREAM, GROUP, "1-0")])
 
     def test_completed_duplicate_is_safe_noop(self):
         repo, client = Repository(None, status="COMPLETED"), Client()
-        Worker(repo, client, Transcriber("ignored"), Translator(TranslationResult("so", "en", "ignored")), "test").process("1-0", {"transcription_id": "job-1"})
+        Worker(repo, client, Transcriber("ignored"), Translator(TranslationResult("so", "en", "ignored")), Validator(ValidationResult(True)), "test").process("1-0", {"transcription_id": "job-1"})
         self.assertEqual(repo.completed, [])
         self.assertEqual(repo.status, "COMPLETED")
         self.assertEqual(client.acks, [(STREAM, GROUP, "1-0")])
+
+    def test_validator_correction_is_persisted(self):
+        repo, client = Repository(Job("job-1", "/audio")), Client()
+        Worker(repo, client, Transcriber("Salaan"), Translator(TranslationResult("so", "en", "Hi")), Validator(ValidationResult(False, "Hello")), "test").process("1-0", {"transcription_id": "job-1"})
+        self.assertEqual(repo.completed[0][-1], "Hello")
+
+    def test_validation_failure_fails_job_safely(self):
+        repo, client = Repository(Job("job-1", "/audio")), Client()
+        Worker(repo, client, Transcriber("Salaan"), Translator(TranslationResult("so", "en", "Hello")), Validator(ValidationResult(False)), "test").process("1-0", {"transcription_id": "job-1"})
+        self.assertEqual(repo.failed, [("job-1", "audio processing failed")])
 
 
 class OpenAIClientTests(unittest.TestCase):
@@ -161,3 +182,13 @@ class OpenAIClientTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "OpenAI translation request failed"):
             OpenAITranslator("test-key", "test-model", opener).translate("Salaan")
+
+    def test_validator_posts_structured_request_and_parses_correction(self):
+        requests = []
+        def opener(http_request, timeout):
+            requests.append((http_request, timeout))
+            return self.Response(b'{"choices":[{"message":{"content":"{\\"valid\\":false,\\"corrected_text\\":\\"Hello\\"}"}}]}')
+        result = OpenAIValidator("test-key", "test-model", opener).validate("Salaan", TranslationResult("so", "en", "Hi"))
+        self.assertEqual(result, ValidationResult(False, "Hello"))
+        body = json.loads(requests[0][0].data)
+        self.assertTrue(body["response_format"]["json_schema"]["strict"])

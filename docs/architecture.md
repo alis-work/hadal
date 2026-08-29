@@ -47,6 +47,8 @@ Workers execute durable, long-running media steps outside the webhook request pa
 
 The initial schema contains `whatsapp_senders` for normalized sender-phone allowlist policy, a separate international country code, administrator designation, and daily request limits; `NULL` means no per-sender daily limit. `daily_quota_usage` stores durable per-sender daily paid-request reservations and completions. No allowlisted phone numbers are stored in versioned SQL. A future application transaction must make a quota reservation atomically before a paid provider call and adjust it after the outcome; Redis may reject short bursts but must not be the sole daily-quota authority.
 
+Registration codes are four-digit environment secrets, not database values. Before WhatsApp integration, the required `X-Hadal-Sender` E.164 header is a development-only identity shim; verified webhook identity replaces it. A `PERMITTED_USER` has a 30-second maximum audio length and 10 accepted audio messages per day. A `RECRUITER` has a 10-second maximum length and three accepted audio messages over its lifetime; accepting the third atomically transitions the sender to `DISABLED`. Redis rejects bursts above three submissions per sender per minute before storage; PostgreSQL atomically enforces durable quotas and recruiter state after ffprobe duration validation and before queueing.
+
 ### External Providers
 
 - WhatsApp Business Cloud API: webhook delivery, inbound-message metadata/media access, and outbound replies.
@@ -73,7 +75,8 @@ Text translation may remain synchronous only while its provider call fits the we
 2. The application verifies and authorizes the sender, applies cost safeguards, stores media and durable job metadata, and queues transcription work.
 3. A worker sends audio to OpenAI transcription without a language hint and receives the source transcript.
 4. The worker sends that transcript in a separate OpenAI text request. Its strict structured response identifies Somali or English, selects the opposite target language, and supplies the translation; other languages fail.
-5. The worker persists the source transcript, detected and target languages, translated text, and state transitions, then sends the text reply through WhatsApp.
+5. The worker makes a third strict structured validation call over the source transcript and proposed translation. A safe corrected translation replaces the proposed text; an invalid or failed validation without a correction fails the job.
+6. The worker persists the source transcript, detected and target languages, validated translated text, and state transitions, then sends the text reply through WhatsApp.
 
 ### Photo OCR
 

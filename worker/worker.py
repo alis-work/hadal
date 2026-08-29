@@ -36,11 +36,21 @@ class Translator(Protocol):
     def translate(self, text: str) -> "TranslationResult": ...
 
 
+class Validator(Protocol):
+    def validate(self, transcript: str, translation: "TranslationResult") -> "ValidationResult": ...
+
+
 @dataclass
 class TranslationResult:
     source_language: str
     target_language: str
     translated_text: str
+
+
+@dataclass
+class ValidationResult:
+    valid: bool
+    corrected_text: str | None = None
 
 
 class PostgresRepository:
@@ -189,12 +199,42 @@ class OpenAITranslator:
             raise RuntimeError("OpenAI translation request failed") from None
 
 
+class OpenAIValidator:
+    def __init__(self, api_key: str, model: str, opener=None):
+        self.api_key = api_key
+        self.model = model
+        self.opener = opener or request.urlopen
+
+    def validate(self, transcript: str, translation: TranslationResult) -> ValidationResult:
+        body = {
+            "model": self.model,
+            "messages": [
+                {"role": "system", "content": "Check whether the proposed translation faithfully translates the source text for the supplied opposite-language pair. Return only JSON matching the requested schema. Set valid to true when it is acceptable. When it is not acceptable, include a corrected_text when a safe correction is available."},
+                {"role": "user", "content": json.dumps({"source_transcript": transcript, "source_language": translation.source_language, "target_language": translation.target_language, "proposed_translation": translation.translated_text})},
+            ],
+            "response_format": {"type": "json_schema", "json_schema": {"name": "translation_validation", "strict": True, "schema": {"type": "object", "properties": {"valid": {"type": "boolean"}, "corrected_text": {"type": ["string", "null"]}}, "required": ["valid", "corrected_text"], "additionalProperties": False}}},
+        }
+        try:
+            http_request = request.Request("https://api.openai.com/v1/chat/completions", data=json.dumps(body).encode(), headers={"Authorization": f"Bearer {self.api_key}", "Content-Type": "application/json"}, method="POST")
+            with self.opener(http_request, timeout=30) as response:
+                result = json.loads(json.loads(response.read())["choices"][0]["message"]["content"])
+            if set(result) != {"valid", "corrected_text"} or not isinstance(result["valid"], bool):
+                raise ValueError
+            corrected = result["corrected_text"]
+            if corrected is not None and (not isinstance(corrected, str) or not corrected.strip()):
+                raise ValueError
+            return ValidationResult(result["valid"], corrected.strip() if corrected else None)
+        except (error.URLError, error.HTTPError, KeyError, TypeError, ValueError, IndexError, json.JSONDecodeError):
+            raise RuntimeError("OpenAI translation validation request failed") from None
+
+
 class Worker:
-    def __init__(self, repository: Repository, client, transcriber: Transcriber, translator: Translator, consumer: str, reclaim_idle_ms: int = 3_600_000):
+    def __init__(self, repository: Repository, client, transcriber: Transcriber, translator: Translator, validator: Validator, consumer: str, reclaim_idle_ms: int = 3_600_000):
         self.repository = repository
         self.client = client
         self.transcriber = transcriber
         self.translator = translator
+        self.validator = validator
         self.consumer = consumer
         self.reclaim_idle_ms = reclaim_idle_ms
 
@@ -219,7 +259,11 @@ class Worker:
                 raise ValueError("unsupported detected language")
             if not result.translated_text:
                 raise RuntimeError("empty translation")
-            self.repository.complete(job.id, transcript, result.source_language, result.target_language, result.translated_text)
+            validation = self.validator.validate(transcript, result)
+            if not validation.valid and not validation.corrected_text:
+                raise RuntimeError("translation validation failed")
+            translated_text = validation.corrected_text or result.translated_text
+            self.repository.complete(job.id, transcript, result.source_language, result.target_language, translated_text)
             try:
                 os.remove(job.storage_path)
             except FileNotFoundError:
@@ -277,7 +321,8 @@ def main() -> None:
         raise RuntimeError("OPENAI_API_KEY must be set for the worker to start")
     transcriber = OpenAITranscriber(api_key, os.getenv("OPENAI_TRANSCRIPTION_MODEL", "gpt-transcribe"))
     translator = OpenAITranslator(api_key, os.getenv("OPENAI_TRANSLATION_MODEL", "gpt-4o-mini"))
-    Worker(PostgresRepository(database_url, stale_after_seconds), redis.Redis.from_url(redis_url, decode_responses=True), transcriber, translator, consumer, stale_after_seconds * 1000).run()
+    validator = OpenAIValidator(api_key, os.getenv("OPENAI_TRANSLATION_MODEL", "gpt-4o-mini"))
+    Worker(PostgresRepository(database_url, stale_after_seconds), redis.Redis.from_url(redis_url, decode_responses=True), transcriber, translator, validator, consumer, stale_after_seconds * 1000).run()
 
 
 if __name__ == "__main__":

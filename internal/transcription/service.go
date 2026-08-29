@@ -9,22 +9,40 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/alimohamed/hadal/internal/access"
 	"github.com/google/uuid"
 )
-
-var ErrUnsupportedAudio = errors.New("unsupported audio")
 
 type Service struct {
 	repository Repository
 	queue      Queue
 	storage    Storage
+	prober     DurationProber
+	senders    access.Repository
 }
 
-func NewService(repository Repository, queue Queue, storage Storage) *Service {
-	return &Service{repository: repository, queue: queue, storage: storage}
+func NewService(repository Repository, queue Queue, storage Storage, prober DurationProber, senders access.Repository) *Service {
+	return &Service{repository: repository, queue: queue, storage: storage, prober: prober, senders: senders}
 }
 
-func (s *Service) Submit(ctx context.Context, source io.Reader, filename, contentType string) (Record, error) {
+func (s *Service) Submit(ctx context.Context, senderPhone string, source io.Reader, filename, contentType string) (Record, error) {
+	sender, err := s.senders.Get(ctx, senderPhone)
+	if errors.Is(err, access.ErrSenderNotFound) {
+		return Record{}, ErrSenderNotFound
+	}
+	if err != nil {
+		return Record{}, fmt.Errorf("load sender: %w", err)
+	}
+	if sender.Status != access.Active {
+		return Record{}, ErrSenderDisabled
+	}
+	if sender.Role == access.AdminRole {
+		return Record{}, ErrSenderAdmin
+	}
+	policy, ok := access.PolicyFor(sender.Role)
+	if !ok {
+		return Record{}, ErrSenderDisabled
+	}
 	extension, normalizedType, err := validateAudio(filename, contentType)
 	if err != nil {
 		return Record{}, err
@@ -37,7 +55,20 @@ func (s *Service) Submit(ctx context.Context, source io.Reader, filename, conten
 	if err != nil {
 		return Record{}, err
 	}
-	item, inserted, err := s.repository.CreateOrGet(ctx, Record{ID: uuid.New(), ContentSHA256: stored.SHA256, OriginalFilename: filepath.Base(filename), ContentType: normalizedType, ByteSize: stored.Size, StoragePath: stored.Path})
+	duration, err := s.prober.Probe(ctx, stored.Path)
+	if err != nil {
+		if stored.Created {
+			_ = s.storage.Delete(ctx, stored.Path)
+		}
+		return Record{}, fmt.Errorf("%w: %v", ErrDurationProbe, err)
+	}
+	if duration > policy.MaxDuration {
+		if stored.Created {
+			_ = s.storage.Delete(ctx, stored.Path)
+		}
+		return Record{}, ErrAudioTooLong
+	}
+	item, inserted, err := s.repository.CreateOrGetAccepted(ctx, Record{ID: uuid.New(), SenderID: &sender.ID, ContentSHA256: stored.SHA256, OriginalFilename: filepath.Base(filename), ContentType: normalizedType, ByteSize: stored.Size, AudioDuration: duration, StoragePath: stored.Path})
 	if err != nil {
 		if stored.Created {
 			_ = s.storage.Delete(ctx, stored.Path)

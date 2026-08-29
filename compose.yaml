@@ -48,6 +48,8 @@ services:
       REDIS_URL: ${COMPOSE_REDIS_URL:?COMPOSE_REDIS_URL must be set in .env}
       AUDIO_TEMP_DIR: /data/audio
       API_ADDR: :8080
+      PERMITTED_USER_REGISTRATION_CODE: ${PERMITTED_USER_REGISTRATION_CODE:?PERMITTED_USER_REGISTRATION_CODE must be set in .env}
+      RECRUITER_REGISTRATION_CODE: ${RECRUITER_REGISTRATION_CODE:?RECRUITER_REGISTRATION_CODE must be set in .env}
     depends_on:
       postgres:
         condition: service_healthy
