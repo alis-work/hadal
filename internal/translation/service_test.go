@@ -181,3 +181,16 @@ func TestResultValidation(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatReplyReturnsOnlyCopyableText(t *testing.T) {
+	interpreted := "Hello, how are you?"
+	result := Result{
+		SourceLanguage:    English,
+		TargetLanguage:    Somali,
+		TranslatedText:    "Salaan, sidee tahay?",
+		InterpretedSource: &interpreted,
+	}
+	if reply := FormatReply(result); reply != result.TranslatedText {
+		t.Fatalf("reply=%q", reply)
+	}
+}

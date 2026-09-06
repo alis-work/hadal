@@ -12,6 +12,11 @@ from urllib import error, request
 
 STREAM = "transcription-jobs"
 GROUP = "transcription-workers"
+TRANSCRIPTION_PROMPT = (
+    "The audio is spoken in English or Somali. Transcribe it verbatim in the language spoken. "
+    "Do not translate, paraphrase, complete sentences, or infer words that are not audible. "
+    "Preserve names, repetitions, and uncertainty exactly when clear."
+)
 
 
 @dataclass
@@ -61,13 +66,7 @@ class ValidationResult:
 
 
 def format_result_reply(transcript: str, detected_language: str, target_language: str, translated_text: str) -> str:
-    language_names = {"so": "Somali", "en": "English"}
-    return (
-        f"Source transcript:\n{transcript}\n\n"
-        f"Detected language: {language_names[detected_language]} ({detected_language})\n"
-        f"Target language: {language_names[target_language]} ({target_language})\n\n"
-        f"Translation:\n{translated_text}"
-    )
+    return translated_text
 
 
 class PostgresRepository:
@@ -244,6 +243,12 @@ class OpenAITranscriber:
                 f"--{boundary}\r\n"
                 "Content-Disposition: form-data; name=\"model\"\r\n\r\n"
                 f"{self.model}\r\n"
+                f"--{boundary}\r\n"
+                "Content-Disposition: form-data; name=\"prompt\"\r\n\r\n"
+                f"{TRANSCRIPTION_PROMPT}\r\n"
+                f"--{boundary}\r\n"
+                "Content-Disposition: form-data; name=\"temperature\"\r\n\r\n"
+                "0\r\n"
                 f"--{boundary}\r\n"
                 f"Content-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\n"
                 f"Content-Type: {content_type}\r\n\r\n"

@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 
-from worker.worker import GROUP, STREAM, Job, OpenAITranscriber, OpenAITranslator, OpenAIValidator, TransientProviderError, TranslationResult, ValidationResult, Worker, format_result_reply
+from worker.worker import GROUP, STREAM, TRANSCRIPTION_PROMPT, Job, OpenAITranscriber, OpenAITranslator, OpenAIValidator, TransientProviderError, TranslationResult, ValidationResult, Worker, format_result_reply
 
 
 class Repository:
@@ -87,11 +87,7 @@ class Validator:
 
 class WorkerTests(unittest.TestCase):
     def test_result_reply_formats_bilingual_result(self):
-        self.assertEqual(
-            format_result_reply("Salaan", "so", "en", "Hello"),
-            "Source transcript:\nSalaan\n\nDetected language: Somali (so)\n"
-            "Target language: English (en)\n\nTranslation:\nHello",
-        )
+        self.assertEqual(format_result_reply("Salaan", "so", "en", "Hello"), "Hello")
 
     def test_somali_classification_completes_with_english_translation(self):
         repo, client = Repository(Job("job-1", "/audio")), Client()
@@ -178,6 +174,8 @@ class OpenAIClientTests(unittest.TestCase):
         self.assertEqual(http_request.full_url, "https://api.openai.com/v1/audio/transcriptions")
         self.assertEqual(http_request.get_header("Authorization"), "Bearer test-key")
         self.assertIn(b'name="model"\r\n\r\ntest-model', http_request.data)
+        self.assertIn(b'name="prompt"\r\n\r\n' + TRANSCRIPTION_PROMPT.encode(), http_request.data)
+        self.assertIn(b'name="temperature"\r\n\r\n0', http_request.data)
         self.assertIn(b'filename="' + filename + b'"', http_request.data)
         self.assertNotIn(b'name="language"', http_request.data)
 

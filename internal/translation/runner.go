@@ -101,10 +101,5 @@ func FormatReply(result Result) string {
 	if result.ClarificationRequired {
 		return *result.ClarificationQuestion
 	}
-	languages := map[string]string{Somali: "Somali", English: "English"}
-	body := fmt.Sprintf("Detected language: %s (%s)\nTarget language: %s (%s)\n\nTranslation:\n%s", languages[result.SourceLanguage], result.SourceLanguage, languages[result.TargetLanguage], result.TargetLanguage, result.TranslatedText)
-	if result.InterpretedSource != nil {
-		body = "Interpreted source:\n" + *result.InterpretedSource + "\n\n" + body
-	}
-	return body
+	return result.TranslatedText
 }
