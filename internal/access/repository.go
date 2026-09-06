@@ -81,7 +81,7 @@ func (r *PostgresRepository) Register(ctx context.Context, phone, countryCode st
 	} else if err != nil {
 		return Sender{}, err
 	} else if testerCanSwitch(phone, r.testerPhone) {
-		err = tx.QueryRow(ctx, `UPDATE whatsapp_senders SET role = $2, access_status = 'ACTIVE', recruiter_audio_messages_used = 0, disabled_at = NULL, updated_at = NOW() WHERE id = $1 RETURNING id, phone_number, role, access_status`, sender.ID, role).Scan(&sender.ID, &sender.Phone, &sender.Role, &sender.Status)
+		err = tx.QueryRow(ctx, `UPDATE whatsapp_senders SET role = $2, access_status = 'ACTIVE', paid_messages_used = 0, disabled_at = NULL, updated_at = NOW() WHERE id = $1 RETURNING id, phone_number, role, access_status`, sender.ID, role).Scan(&sender.ID, &sender.Phone, &sender.Role, &sender.Status)
 		if err != nil {
 			return Sender{}, err
 		}
@@ -91,7 +91,7 @@ func (r *PostgresRepository) Register(ctx context.Context, phone, countryCode st
 		}
 		return Sender{}, ErrRoleDowngrade
 	} else if next == PermittedUserRole && sender.Role == RecruiterRole {
-		err = tx.QueryRow(ctx, `UPDATE whatsapp_senders SET role = 'PERMITTED_USER', access_status = 'ACTIVE', recruiter_audio_messages_used = 0, disabled_at = NULL, updated_at = NOW() WHERE id = $1 RETURNING id, phone_number, role, access_status`, sender.ID).Scan(&sender.ID, &sender.Phone, &sender.Role, &sender.Status)
+		err = tx.QueryRow(ctx, `UPDATE whatsapp_senders SET role = 'PERMITTED_USER', access_status = 'ACTIVE', paid_messages_used = 0, disabled_at = NULL, updated_at = NOW() WHERE id = $1 RETURNING id, phone_number, role, access_status`, sender.ID).Scan(&sender.ID, &sender.Phone, &sender.Role, &sender.Status)
 		if err != nil {
 			return Sender{}, err
 		}

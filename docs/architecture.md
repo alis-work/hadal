@@ -33,11 +33,11 @@ Documents/PDFs, conversation mode, history, sharing, and audio responses are lat
 
 ### Go Application
 
-The Go application owns the WhatsApp webhook, sender authorization, synchronous text translation requests, job creation, persistence, provider selection, and outbound WhatsApp replies. Its internal modules should separate transport, application workflow, domain/persistence, and provider adapters without introducing networked services merely for separation.
+The Go application owns the WhatsApp webhook, sender authorization, durable text-translation job creation, persistence, and outbound WhatsApp replies. A separate Go worker owns text provider selection and execution so provider credentials remain outside the API process. Internal modules separate transport, application workflow, domain/persistence, and provider adapters without introducing networked services merely for separation.
 
 ### Workers
 
-Workers execute durable, long-running media steps outside the webhook request path. Audio transcription, image OCR, and downstream translation are worker responsibilities. Workers persist state transitions and results, then request the Go application's outbound-message capability or otherwise use the same integration boundary.
+Workers execute durable provider steps outside the webhook request path. Text translation, audio transcription, image OCR, and downstream translation are worker responsibilities. Workers persist state transitions, results, and transactional outbox messages for the Go outbound dispatcher.
 
 ### Storage
 
@@ -45,9 +45,9 @@ Workers execute durable, long-running media steps outside the webhook request pa
 - Object or file storage: downloaded WhatsApp media and any derived media artifacts. The initial audio path uses a configured filesystem directory; PostgreSQL stores only its path and metadata.
 - Redis: enforcement and coordination data with appropriate expiry; it is not the source of truth for durable job state.
 
-The initial schema contains `whatsapp_senders` for normalized sender-phone allowlist policy, a separate international country code, administrator designation, and daily request limits; `NULL` means no per-sender daily limit. `daily_quota_usage` stores durable per-sender daily paid-request reservations and completions. No allowlisted phone numbers are stored in versioned SQL. A future application transaction must make a quota reservation atomically before a paid provider call and adjust it after the outcome; Redis may reject short bursts but must not be the sole daily-quota authority.
+The initial schema contains `whatsapp_senders` for normalized sender-phone allowlist policy, a separate international country code, administrator designation, and daily request limits; `NULL` means no per-sender daily limit. `daily_quota_usage` stores durable per-sender daily paid-request reservations and completions. No allowlisted phone numbers are stored in versioned SQL. Application transactions reserve quota atomically before creating paid work and record successful completion afterward; Redis may reject short bursts but is not the sole daily-quota authority.
 
-Registration codes are four-digit environment secrets, not database values. Before WhatsApp integration, the required `X-Hadal-Sender` E.164 header is a development-only identity shim; verified webhook identity replaces it. A `PERMITTED_USER` has a 30-second maximum audio length and 10 accepted audio messages per day. A `RECRUITER` has a 10-second maximum length and three accepted audio messages over its lifetime; accepting the third atomically transitions the sender to `DISABLED`. Redis rejects bursts above three submissions per sender per minute before storage; PostgreSQL atomically enforces durable quotas and recruiter state after ffprobe duration validation and before queueing.
+Registration codes are four-digit environment secrets, not database values. Before WhatsApp integration, the required `X-Hadal-Sender` E.164 header is a development-only identity shim; verified webhook identity replaces it. A `PERMITTED_USER` has a 30-second maximum audio length and 10 accepted paid messages per day across text and audio. A `RECRUITER` has a 10-second maximum audio length and three accepted paid messages over its lifetime; accepting the third atomically transitions the sender to `DISABLED`. Redis rejects bursts above three submissions per sender per minute before storage; PostgreSQL atomically enforces durable quotas and recruiter state before queueing paid work.
 
 ### External Providers
 
@@ -65,9 +65,9 @@ Provider adapters should normalize provider-specific requests, responses, failur
 1. WhatsApp sends an inbound text message to the Go webhook.
 2. The application verifies the webhook and authorizes the sender against the allowlist.
 3. It applies quota, rate-limit, and global safeguard checks before provider use.
-4. The application identifies the requested or detected translation direction, calls the translation provider, persists the result, and replies through WhatsApp.
-
-Text translation may remain synchronous only while its provider call fits the webhook response and reliability constraints. This is a recommendation, not a final implementation decision.
+4. The application atomically reserves quota and persists a pending translation job.
+5. A separate Go worker detects Somali or English, translates into the opposite language, and persists the result and outbox reply transactionally.
+6. If intended meaning is too ambiguous, the worker persists and sends one concise clarification question in the source language instead of inventing a translation.
 
 ### Voice and Audio
 

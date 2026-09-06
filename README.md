@@ -6,7 +6,7 @@ The initial interface will be a WhatsApp bot. It will support Somali or English 
 
 ## Status
 
-The first local end-to-end audio path is available: a Go upload API writes audio to local filesystem storage, PostgreSQL stores job metadata/results, Redis Streams dispatches work, and a dedicated Python worker calls OpenAI transcription, translation, and translation validation.
+The local WhatsApp path supports durable Somali/English text translation and voice-note transcription with opposite-language translation. PostgreSQL stores message and job state, a Go translation worker handles text, and a dedicated Python worker handles audio transcription, translation, and translation validation.
 
 ## Direction
 
@@ -26,14 +26,14 @@ Kafka, document handling, conversation mode, history, sharing, and audio respons
 
 Secrets, WhatsApp tokens, database passwords, API keys, and phone-number allowlists must not be committed. When runtime configuration is introduced, `.env.example` will list variable names without values.
 
-## Local Audio Workflow
+## Local Workflow
 
-1. Create local configuration: `cp .env.example .env`. Set `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_PORT`. For host processes set `DATABASE_URL=postgres://USER:PASSWORD@localhost:5432/DB?sslmode=disable` and `REDIS_URL=redis://localhost:6379/0`. For Compose services set `COMPOSE_DATABASE_URL=postgres://USER:PASSWORD@postgres:5432/DB?sslmode=disable` and `COMPOSE_REDIS_URL=redis://redis:6379/0`. URL-encode passwords when needed. Set `AUDIO_TEMP_DIR=./data/audio`, `API_ADDR=:8080`, `GLOBAL_DAILY_AUDIO_LIMIT=100`, all WhatsApp variables described below, the two ignored registration-code variables, and the ignored `OPENAI_API_KEY`. Optional worker values include `OPENAI_TRANSCRIPTION_MODEL=gpt-transcribe`, `OPENAI_TRANSLATION_MODEL=gpt-4o-mini`, `PROVIDER_MAX_ATTEMPTS=3`, and `PROCESSING_STALE_AFTER_SECONDS=3600`. The API receives Meta credentials but not the OpenAI key; only the worker receives the OpenAI key.
+1. Create local configuration: `cp .env.example .env`. Set `POSTGRES_DB`, `POSTGRES_USER`, `POSTGRES_PASSWORD`, and `POSTGRES_PORT`. For host processes set `DATABASE_URL=postgres://USER:PASSWORD@localhost:5432/DB?sslmode=disable` and `REDIS_URL=redis://localhost:6379/0`. For Compose services set `COMPOSE_DATABASE_URL=postgres://USER:PASSWORD@postgres:5432/DB?sslmode=disable` and `COMPOSE_REDIS_URL=redis://redis:6379/0`. URL-encode passwords when needed. Set `AUDIO_TEMP_DIR=./data/audio`, `API_ADDR=:8080`, `GLOBAL_DAILY_AUDIO_LIMIT=100`, all WhatsApp variables described below, the two ignored registration-code variables, and the ignored `OPENAI_API_KEY`. Optional worker values include `OPENAI_TRANSCRIPTION_MODEL=gpt-transcribe`, `OPENAI_TRANSLATION_MODEL=gpt-4o-mini`, `PROVIDER_MAX_ATTEMPTS=3`, `PROCESSING_STALE_AFTER_SECONDS=3600`, and `TRANSLATION_PROCESSING_STALE_AFTER_SECONDS=300`. The API receives Meta credentials but never the OpenAI key; only provider workers receive the OpenAI key.
 2. Start PostgreSQL and Redis: `docker compose up -d postgres redis`.
 3. Apply migrations: `docker compose --profile tools run --rm migrate`.
 4. Start the API on the host without exposing the OpenAI key to it: `set -a && source .env && set +a && unset OPENAI_API_KEY && go run ./cmd/api`.
-5. In another terminal, install the worker dependencies and start it with the key: `python3 -m venv .venv && .venv/bin/pip install -r worker/requirements.txt && set -a && source .env && set +a && .venv/bin/python -m worker.worker`.
-6. Or run both application processes in Compose after migration: `docker compose --profile app up --build api worker`.
+5. In separate terminals, start the Go text worker with `set -a && source .env && set +a && go run ./cmd/translation-worker`, and install/start the Python audio worker with `python3 -m venv .venv && .venv/bin/pip install -r worker/requirements.txt && set -a && source .env && set +a && .venv/bin/python -m worker.worker`.
+6. Or run all application processes in Compose after migration: `docker compose --profile app up --build api worker translation-worker`.
 7. Register a local development sender with one runtime registration code: `curl -X POST -H "X-Hadal-Sender: +15550000001" -H "Content-Type: application/json" -d '{"code":"YOUR_RUNTIME_CODE"}' http://localhost:8080/api/registrations`.
 8. Upload a Somali or English audio file with the same sender: `curl -H "X-Hadal-Sender: +15550000001" -F "file=@/path/to/audio.m4a" http://localhost:8080/api/transcriptions`.
 9. Copy the returned `id`, then poll it: `curl http://localhost:8080/api/transcriptions/ID`.
@@ -47,7 +47,7 @@ Expose the local API through a public HTTPS tunnel, then use `https://YOUR_PUBLI
 
 The API also requires `WHATSAPP_APP_SECRET` from **App settings > Basic**, a fresh `WHATSAPP_ACCESS_TOKEN` with `whatsapp_business_messaging`, `WHATSAPP_PHONE_NUMBER_ID` from the WhatsApp API setup request URL, and `WHATSAPP_GRAPH_API_VERSION` (currently `v26.0`). Never paste these values into documentation, screenshots, or Git. Graph API Explorer tokens are temporary; use a properly scoped system-user token for production.
 
-`POST /webhook` validates Meta's `X-Hub-Signature-256`, persists provider message IDs idempotently, and returns immediately. A durable Go intake loop registers senders whose text is exactly one configured four-digit code, or authorizes and downloads voice media before queueing the existing worker. Registration codes are classified during authenticated intake and never stored. The Python worker persists the transcript and opposite-language translation, creates an outbox reply transactionally, and retries transient provider failures. A Go dispatcher sends pending replies and records Meta's provider message ID.
+`POST /webhook` validates Meta's `X-Hub-Signature-256`, persists provider message IDs idempotently, and returns immediately. A durable Go intake loop registers senders whose text is exactly one configured four-digit code, queues other text for translation, or authorizes and downloads voice media before queueing the audio worker. Registration codes are classified during authenticated intake and never stored. The Go text worker detects Somali or English, translates into the opposite language, and asks a source-language clarification question rather than guessing when meaning is too ambiguous. Provider workers persist terminal results and outbox replies transactionally and retry transient failures. A Go dispatcher sends pending replies and records Meta's provider message ID.
 
 While the Meta app is unpublished, Meta only delivers dashboard-generated test webhooks. Use **Test** beside the subscribed `messages` webhook field to verify intake. Real user messages require the app to be published.
 

@@ -23,9 +23,9 @@ This is an MVP-first implementation plan. Each phase should be completed and ver
 
 ### 3. Text Translation
 
-- Define a translation-provider interface.
-- Add the initial OpenAI-backed translation adapter.
-- Support Somali-to-English and English-to-Somali WhatsApp text workflows.
+- Define a translation-provider interface. Complete locally.
+- Add the initial OpenAI-backed translation adapter. Complete locally.
+- Support Somali-to-English and English-to-Somali WhatsApp text workflows. Complete locally with durable asynchronous processing.
 - Persist translation outcomes and provider-use metadata needed for support and safeguards.
 - Verify the full inbound text to outbound reply path.
 

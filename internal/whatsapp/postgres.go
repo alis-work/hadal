@@ -50,6 +50,7 @@ func (r *PostgresRepository) ReconcileInbound(ctx context.Context, maxAttempts i
 		   OR (message.attempt_count >= $1 AND (
 				message.status IN ('PENDING', 'FAILED')
 				OR (message.status = 'PROCESSING' AND message.transcription_id IS NULL
+					AND NOT EXISTS (SELECT 1 FROM text_translations WHERE inbound_message_id = message.id)
 					AND message.processing_started_at < NOW() - INTERVAL '5 minutes')))
 		ORDER BY message.created_at
 		FOR UPDATE OF message SKIP LOCKED
@@ -101,6 +102,7 @@ func (r *PostgresRepository) ClaimInbound(ctx context.Context, maxAttempts int) 
 			WHERE attempt_count < $1
 			  AND ((status IN ('PENDING', 'FAILED') AND next_attempt_at <= NOW())
 			       OR (status = 'PROCESSING' AND transcription_id IS NULL
+			           AND NOT EXISTS (SELECT 1 FROM text_translations WHERE inbound_message_id = whatsapp_inbound_messages.id)
 			           AND processing_started_at < NOW() - INTERVAL '5 minutes'))
 			ORDER BY created_at
 			FOR UPDATE SKIP LOCKED

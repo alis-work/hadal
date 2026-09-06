@@ -12,10 +12,15 @@ import (
 
 	"github.com/alimohamed/hadal/internal/access"
 	"github.com/alimohamed/hadal/internal/transcription"
+	"github.com/alimohamed/hadal/internal/translation"
 )
 
 type TranscriptionService interface {
 	SubmitWhatsApp(context.Context, int64, string, io.Reader, string, string) (transcription.Record, error)
+}
+
+type TranslationService interface {
+	Submit(context.Context, int64, string, string) (translation.Record, error)
 }
 
 type MessageRateLimiter interface {
@@ -29,6 +34,7 @@ type Processor struct {
 	access        access.Repository
 	rateLimiter   MessageRateLimiter
 	transcription TranscriptionService
+	translation   TranslationService
 	maxMediaBytes int64
 	maxAttempts   int
 }
@@ -38,11 +44,11 @@ type processResult struct {
 	deferred bool
 }
 
-func NewProcessor(repository Repository, client Client, accessRepository access.Repository, rateLimiter MessageRateLimiter, transcriptionService TranscriptionService, maxMediaBytes int64, maxAttempts int) *Processor {
+func NewProcessor(repository Repository, client Client, accessRepository access.Repository, rateLimiter MessageRateLimiter, transcriptionService TranscriptionService, translationService TranslationService, maxMediaBytes int64, maxAttempts int) *Processor {
 	if maxAttempts <= 0 {
 		maxAttempts = 3
 	}
-	return &Processor{repository: repository, client: client, access: accessRepository, rateLimiter: rateLimiter, transcription: transcriptionService, maxMediaBytes: maxMediaBytes, maxAttempts: maxAttempts}
+	return &Processor{repository: repository, client: client, access: accessRepository, rateLimiter: rateLimiter, transcription: transcriptionService, translation: translationService, maxMediaBytes: maxMediaBytes, maxAttempts: maxAttempts}
 }
 
 func (p *Processor) ProcessOne(ctx context.Context) (bool, error) {
@@ -95,12 +101,29 @@ func (p *Processor) process(ctx context.Context, message InboundMessage) (proces
 	case "registration_invalid":
 		return p.processRegistrationAttempt(ctx, message, "")
 	case "text":
-		return processResult{reply: "Send your four-digit registration code or a voice note."}, nil
+		return p.processText(ctx, message)
 	case "audio":
 		return p.processAudio(ctx, message)
 	default:
-		return processResult{reply: "Hadal currently supports four-digit registration codes and voice notes."}, nil
+		return processResult{reply: "Hadal currently supports four-digit registration codes, text messages, and voice notes."}, nil
 	}
+}
+
+func (p *Processor) processText(ctx context.Context, message InboundMessage) (processResult, error) {
+	allowed, err := p.rateLimiter.AllowMessage(ctx, message.Sender, message.ProviderMessageID)
+	if err != nil {
+		return processResult{}, fmt.Errorf("check text rate limit: %w", err)
+	}
+	if !allowed {
+		return processResult{reply: "Too many text messages. Please wait a minute and try again."}, nil
+	}
+	if _, err := p.translation.Submit(ctx, message.ID, message.Sender, message.Text); err != nil {
+		if isTranslationSubmissionError(err) {
+			return processResult{}, permanent(err)
+		}
+		return processResult{}, fmt.Errorf("submit text translation: %w", err)
+	}
+	return processResult{deferred: true}, nil
 }
 
 func (p *Processor) processRegistrationAttempt(ctx context.Context, message InboundMessage, role access.Role) (processResult, error) {
@@ -222,6 +245,18 @@ func isPolicyError(err error) bool {
 		errors.Is(err, transcription.ErrDurationProbe)
 }
 
+func isTranslationSubmissionError(err error) bool {
+	return errors.Is(err, translation.ErrEmptySource) ||
+		errors.Is(err, translation.ErrSourceTooLong) ||
+		errors.Is(err, translation.ErrSenderNotFound) ||
+		errors.Is(err, translation.ErrSenderDisabled) ||
+		errors.Is(err, translation.ErrSenderAdmin) ||
+		errors.Is(err, translation.ErrDailyQuota) ||
+		errors.Is(err, translation.ErrGlobalQuota) ||
+		errors.Is(err, translation.ErrRecruiterQuota) ||
+		errors.Is(err, translation.ErrInvalidInbound)
+}
+
 func userMessage(err error) string {
 	switch {
 	case errors.Is(err, ErrMediaTooLarge):
@@ -242,6 +277,20 @@ func userMessage(err error) string {
 		return "Hadal has reached today's processing limit. Please try again tomorrow."
 	case errors.Is(err, transcription.ErrDurationProbe):
 		return "The voice-note duration could not be read."
+	case errors.Is(err, translation.ErrEmptySource):
+		return "Send some Somali or English text to translate."
+	case errors.Is(err, translation.ErrSourceTooLong):
+		return "That text is too long. Please send a shorter message."
+	case errors.Is(err, translation.ErrSenderNotFound):
+		return "Register with your four-digit code before sending text."
+	case errors.Is(err, translation.ErrSenderDisabled), errors.Is(err, translation.ErrRecruiterQuota):
+		return "Your translation access is disabled."
+	case errors.Is(err, translation.ErrSenderAdmin):
+		return "Text translation is not enabled for this account."
+	case errors.Is(err, translation.ErrDailyQuota):
+		return "You have reached today's message limit."
+	case errors.Is(err, translation.ErrGlobalQuota):
+		return "Hadal has reached today's processing limit. Please try again tomorrow."
 	default:
 		return "We could not process that message. Please try again later."
 	}

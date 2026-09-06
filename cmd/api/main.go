@@ -13,6 +13,7 @@ import (
 	"github.com/alimohamed/hadal/internal/access"
 	"github.com/alimohamed/hadal/internal/httpapi"
 	"github.com/alimohamed/hadal/internal/transcription"
+	"github.com/alimohamed/hadal/internal/translation"
 	"github.com/alimohamed/hadal/internal/whatsapp"
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
@@ -58,13 +59,14 @@ func main() {
 		os.Exit(1)
 	}
 	senders := access.NewPostgresRepository(pool, os.Getenv("WHATSAPP_TESTER_PHONE"))
-	service := transcription.NewService(transcription.NewPostgresRepository(pool, globalDailyLimit), transcription.NewRedisQueue(client), transcription.FileStorage{Directory: directory}, transcription.FFProbe{}, senders)
+	transcriptionService := transcription.NewService(transcription.NewPostgresRepository(pool, globalDailyLimit), transcription.NewRedisQueue(client), transcription.FileStorage{Directory: directory}, transcription.FFProbe{}, senders)
+	translationService := translation.NewService(translation.NewPostgresRepository(pool, globalDailyLimit))
 	codes := access.RegistrationCodesFromEnvironment()
 	limiter := transcription.NewRedisRateLimiter(client)
-	handler := httpapi.NewHandler(service, logger, maxMB*1024*1024, senders, codes, limiter)
+	handler := httpapi.NewHandler(transcriptionService, logger, maxMB*1024*1024, senders, codes, limiter)
 	whatsappRepository := whatsapp.NewPostgresRepository(pool)
 	graphClient := whatsapp.NewGraphClient(&http.Client{Timeout: 30 * time.Second}, "", graphVersion, accessToken)
-	processor := whatsapp.NewProcessor(whatsappRepository, graphClient, senders, limiter, service, maxMB*1024*1024, 5)
+	processor := whatsapp.NewProcessor(whatsappRepository, graphClient, senders, limiter, transcriptionService, translationService, maxMB*1024*1024, 5)
 	dispatcher := whatsapp.NewDispatcher(whatsappRepository, graphClient, phoneNumberID, 5)
 	webhook := httpapi.NewWebhook(logger, verifyToken, httpapi.WithWebhookAppSecret(appSecret), httpapi.WithWebhookInboundStore(whatsappRepository), httpapi.WithWebhookRegistrationCodes(codes))
 	mux := http.NewServeMux()

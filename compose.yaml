@@ -86,6 +86,22 @@ services:
     volumes:
       - audio-data:/data/audio
 
+  translation-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    entrypoint: ["/translation-worker"]
+    profiles: ["app"]
+    environment:
+      DATABASE_URL: ${COMPOSE_DATABASE_URL:?COMPOSE_DATABASE_URL must be set in .env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      OPENAI_TRANSLATION_MODEL: ${OPENAI_TRANSLATION_MODEL:-gpt-4o-mini}
+      PROVIDER_MAX_ATTEMPTS: ${PROVIDER_MAX_ATTEMPTS:-3}
+      TRANSLATION_PROCESSING_STALE_AFTER_SECONDS: ${TRANSLATION_PROCESSING_STALE_AFTER_SECONDS:-300}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
 volumes:
   postgres-data:
   redis-data:

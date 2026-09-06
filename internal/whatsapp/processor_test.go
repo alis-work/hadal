@@ -9,12 +9,14 @@ import (
 
 	"github.com/alimohamed/hadal/internal/access"
 	"github.com/alimohamed/hadal/internal/transcription"
+	"github.com/alimohamed/hadal/internal/translation"
 )
 
 type fakeRepository struct {
 	inbound       InboundMessage
 	outbound      OutboundMessage
 	completed     *OutboundMessage
+	completeCalls int
 	retriedIn     bool
 	retriedOut    bool
 	failedOut     bool
@@ -29,6 +31,7 @@ func (r *fakeRepository) ClaimInbound(context.Context, int) (InboundMessage, err
 	return r.inbound, r.claimInbound
 }
 func (r *fakeRepository) CompleteInbound(_ context.Context, _ int64, message *OutboundMessage) error {
+	r.completeCalls++
 	r.completed = message
 	return nil
 }
@@ -119,6 +122,20 @@ type fakeTranscription struct {
 	err         error
 }
 
+type fakeTranslation struct {
+	called    bool
+	inboundID int64
+	sender    string
+	source    string
+	err       error
+}
+
+func (s *fakeTranslation) Submit(_ context.Context, inboundID int64, sender, source string) (translation.Record, error) {
+	s.called = true
+	s.inboundID, s.sender, s.source = inboundID, sender, source
+	return translation.Record{}, s.err
+}
+
 func (s *fakeTranscription) SubmitWhatsApp(_ context.Context, _ int64, sender string, source io.Reader, filename, contentType string) (transcription.Record, error) {
 	s.called = true
 	s.sender, s.filename, s.contentType = sender, filename, contentType
@@ -130,7 +147,7 @@ func (s *fakeTranscription) SubmitWhatsApp(_ context.Context, _ int64, sender st
 func TestProcessorRegistersFourDigitCodeAndQueuesWelcome(t *testing.T) {
 	repository := &fakeRepository{inbound: InboundMessage{ID: 1, Sender: "+252611234567", Type: "registration_permitted", Attempts: 1}}
 	accessRepository := &fakeAccess{}
-	processor := NewProcessor(repository, &fakeClient{}, accessRepository, &fakeLimiter{allowed: true}, &fakeTranscription{}, 1024, 3)
+	processor := NewProcessor(repository, &fakeClient{}, accessRepository, &fakeLimiter{allowed: true}, &fakeTranscription{}, &fakeTranslation{}, 1024, 3)
 
 	worked, err := processor.ProcessOne(context.Background())
 
@@ -148,7 +165,7 @@ func TestProcessorRegistersFourDigitCodeAndQueuesWelcome(t *testing.T) {
 func TestProcessorRateLimitsBeforeAudioDownload(t *testing.T) {
 	repository := &fakeRepository{inbound: InboundMessage{ID: 2, Sender: "+252611234567", Type: "audio", MediaID: "media", Attempts: 1}}
 	client := &fakeClient{}
-	processor := NewProcessor(repository, client, &fakeAccess{}, &fakeLimiter{allowed: false}, &fakeTranscription{}, 1024, 3)
+	processor := NewProcessor(repository, client, &fakeAccess{}, &fakeLimiter{allowed: false}, &fakeTranscription{}, &fakeTranslation{}, 1024, 3)
 
 	_, err := processor.ProcessOne(context.Background())
 
@@ -164,7 +181,7 @@ func TestProcessorDownloadsAndSubmitsAudio(t *testing.T) {
 	repository := &fakeRepository{inbound: InboundMessage{ID: 3, Sender: "+252611234567", Type: "audio", MediaID: "media", Attempts: 1}}
 	client := &fakeClient{media: Media{ID: "media", MIMEType: "audio/ogg"}, content: "OggSaudio"}
 	service := &fakeTranscription{}
-	processor := NewProcessor(repository, client, &fakeAccess{}, &fakeLimiter{allowed: true}, service, 1024, 3)
+	processor := NewProcessor(repository, client, &fakeAccess{}, &fakeLimiter{allowed: true}, service, &fakeTranslation{}, 1024, 3)
 
 	_, err := processor.ProcessOne(context.Background())
 
@@ -182,12 +199,69 @@ func TestProcessorDownloadsAndSubmitsAudio(t *testing.T) {
 func TestProcessorRetriesTransientAudioFailure(t *testing.T) {
 	repository := &fakeRepository{inbound: InboundMessage{ID: 4, Sender: "+252611234567", Type: "audio", MediaID: "media", Attempts: 1}}
 	client := &fakeClient{resolveErr: errors.New("temporary graph failure")}
-	processor := NewProcessor(repository, client, &fakeAccess{}, &fakeLimiter{allowed: true}, &fakeTranscription{}, 1024, 3)
+	processor := NewProcessor(repository, client, &fakeAccess{}, &fakeLimiter{allowed: true}, &fakeTranscription{}, &fakeTranslation{}, 1024, 3)
 
 	_, err := processor.ProcessOne(context.Background())
 
 	if err != nil || !repository.retriedIn || repository.completed != nil {
 		t.Fatalf("err=%v retried=%v completed=%+v", err, repository.retriedIn, repository.completed)
+	}
+}
+
+func TestProcessorSubmitsTextForDeferredTranslation(t *testing.T) {
+	repository := &fakeRepository{inbound: InboundMessage{ID: 5, ProviderMessageID: "wamid.text", Sender: "+252611234567", Type: "text", Text: "Sidee tahay?", Attempts: 1}}
+	service := &fakeTranslation{}
+	processor := NewProcessor(repository, &fakeClient{}, &fakeAccess{}, &fakeLimiter{allowed: true}, &fakeTranscription{}, service, 1024, 3)
+
+	worked, err := processor.ProcessOne(context.Background())
+
+	if err != nil || !worked {
+		t.Fatalf("worked=%v err=%v", worked, err)
+	}
+	if !service.called || service.inboundID != 5 || service.sender != "+252611234567" || service.source != "Sidee tahay?" {
+		t.Fatalf("submission=%+v", service)
+	}
+	if repository.completeCalls != 0 {
+		t.Fatalf("inbound completed before translation: calls=%d", repository.completeCalls)
+	}
+}
+
+func TestProcessorRateLimitsBeforeTextSubmission(t *testing.T) {
+	repository := &fakeRepository{inbound: InboundMessage{ID: 6, ProviderMessageID: "wamid.text", Sender: "+252611234567", Type: "text", Text: "Hello", Attempts: 1}}
+	service := &fakeTranslation{}
+	processor := NewProcessor(repository, &fakeClient{}, &fakeAccess{}, &fakeLimiter{allowed: false}, &fakeTranscription{}, service, 1024, 3)
+
+	_, err := processor.ProcessOne(context.Background())
+
+	if err != nil || service.called {
+		t.Fatalf("err=%v translation called=%v", err, service.called)
+	}
+	if repository.completed == nil || !strings.Contains(repository.completed.Text, "wait a minute") {
+		t.Fatalf("outbound=%+v", repository.completed)
+	}
+}
+
+func TestProcessorCompletesTextPolicyFailureWithUserReply(t *testing.T) {
+	repository := &fakeRepository{inbound: InboundMessage{ID: 7, ProviderMessageID: "wamid.text", Sender: "+252611234567", Type: "text", Text: "Hello", Attempts: 1}}
+	service := &fakeTranslation{err: translation.ErrDailyQuota}
+	processor := NewProcessor(repository, &fakeClient{}, &fakeAccess{}, &fakeLimiter{allowed: true}, &fakeTranscription{}, service, 1024, 3)
+
+	_, err := processor.ProcessOne(context.Background())
+
+	if err != nil || repository.retriedIn || repository.completed == nil || !strings.Contains(repository.completed.Text, "today's message limit") {
+		t.Fatalf("err=%v retried=%v outbound=%+v", err, repository.retriedIn, repository.completed)
+	}
+}
+
+func TestProcessorRetriesTransientTextSubmissionFailure(t *testing.T) {
+	repository := &fakeRepository{inbound: InboundMessage{ID: 8, ProviderMessageID: "wamid.text", Sender: "+252611234567", Type: "text", Text: "Hello", Attempts: 1}}
+	service := &fakeTranslation{err: errors.New("temporary database failure")}
+	processor := NewProcessor(repository, &fakeClient{}, &fakeAccess{}, &fakeLimiter{allowed: true}, &fakeTranscription{}, service, 1024, 3)
+
+	_, err := processor.ProcessOne(context.Background())
+
+	if err != nil || !repository.retriedIn || repository.completeCalls != 0 {
+		t.Fatalf("err=%v retried=%v complete calls=%d", err, repository.retriedIn, repository.completeCalls)
 	}
 }
 

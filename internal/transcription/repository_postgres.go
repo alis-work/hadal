@@ -98,7 +98,7 @@ func (r *PostgresRepository) CreateOrGetAccepted(ctx context.Context, item Recor
 		}
 	} else if role == access.RecruiterRole {
 		var used int
-		err = tx.QueryRow(ctx, `UPDATE whatsapp_senders SET recruiter_audio_messages_used = recruiter_audio_messages_used + 1, access_status = CASE WHEN recruiter_audio_messages_used + 1 >= $2 THEN 'DISABLED' ELSE 'ACTIVE' END, disabled_at = CASE WHEN recruiter_audio_messages_used + 1 >= $2 THEN NOW() ELSE NULL END, updated_at = NOW() WHERE id = $1 AND recruiter_audio_messages_used < $2 RETURNING recruiter_audio_messages_used`, senderID, policy.MaxMessagesTotal).Scan(&used)
+		err = tx.QueryRow(ctx, `UPDATE whatsapp_senders SET paid_messages_used = paid_messages_used + 1, access_status = CASE WHEN paid_messages_used + 1 >= $2 THEN 'DISABLED' ELSE 'ACTIVE' END, disabled_at = CASE WHEN paid_messages_used + 1 >= $2 THEN NOW() ELSE NULL END, updated_at = NOW() WHERE id = $1 AND paid_messages_used < $2 RETURNING paid_messages_used`, senderID, policy.MaxMessagesTotal).Scan(&used)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Record{}, false, ErrRecruiterQuota
 		}

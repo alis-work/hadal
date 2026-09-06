@@ -3,10 +3,12 @@ WORKDIR /src
 COPY go.mod go.sum* ./
 RUN go mod download
 COPY . .
-RUN CGO_ENABLED=0 go build -o /api ./cmd/api
+RUN CGO_ENABLED=0 go build -o /api ./cmd/api && \
+    CGO_ENABLED=0 go build -o /translation-worker ./cmd/translation-worker
 
 FROM alpine:3.21
 RUN apk add --no-cache ffmpeg && adduser -D -u 10001 app && mkdir -p /data/audio && chown -R app:app /data
 USER app
 COPY --from=build /api /api
+COPY --from=build /translation-worker /translation-worker
 ENTRYPOINT ["/api"]
