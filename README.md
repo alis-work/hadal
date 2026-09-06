@@ -54,3 +54,5 @@ While the Meta app is unpublished, Meta only delivers dashboard-generated test w
 ## Development Registration
 
 `PERMITTED_USER_REGISTRATION_CODE` and `RECRUITER_REGISTRATION_CODE` are separate four-digit runtime secrets. The local endpoint binds them to `X-Hadal-Sender`; WhatsApp users send exactly the code in a text message and are bound to Meta's signed sender identity. A recruiter, including one disabled after three messages, may redeem the permitted-user code to become an active permitted user. A permitted user cannot be downgraded to recruiter.
+
+`WHATSAPP_TESTER_PHONE` is an optional ignored E.164 number for role-policy testing. That sender may enter either registration code at any time to switch from any current role into permitted-user or recruiter behavior; switching resets recruiter usage and reactivates the account. Never commit the configured number. All other senders retain the normal admin and no-downgrade protections.

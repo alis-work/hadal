@@ -35,10 +35,17 @@ type Repository interface {
 	Register(context.Context, string, string, Role) (Sender, error)
 }
 
-type PostgresRepository struct{ pool *pgxpool.Pool }
+type PostgresRepository struct {
+	pool        *pgxpool.Pool
+	testerPhone string
+}
 
-func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
-	return &PostgresRepository{pool: pool}
+func NewPostgresRepository(pool *pgxpool.Pool, testerPhone ...string) *PostgresRepository {
+	var tester string
+	if len(testerPhone) > 0 {
+		tester = testerPhone[0]
+	}
+	return &PostgresRepository{pool: pool, testerPhone: tester}
 }
 
 func (r *PostgresRepository) Get(ctx context.Context, phone string) (Sender, error) {
@@ -73,6 +80,11 @@ func (r *PostgresRepository) Register(ctx context.Context, phone, countryCode st
 		}
 	} else if err != nil {
 		return Sender{}, err
+	} else if testerCanSwitch(phone, r.testerPhone) {
+		err = tx.QueryRow(ctx, `UPDATE whatsapp_senders SET role = $2, access_status = 'ACTIVE', recruiter_audio_messages_used = 0, disabled_at = NULL, updated_at = NOW() WHERE id = $1 RETURNING id, phone_number, role, access_status`, sender.ID, role).Scan(&sender.ID, &sender.Phone, &sender.Role, &sender.Status)
+		if err != nil {
+			return Sender{}, err
+		}
 	} else if next, allowed := RegistrationTransition(sender.Role, role); !allowed {
 		if sender.Role == AdminRole {
 			return Sender{}, ErrAdmin
@@ -88,4 +100,8 @@ func (r *PostgresRepository) Register(ctx context.Context, phone, countryCode st
 		return Sender{}, fmt.Errorf("commit registration: %w", err)
 	}
 	return sender, nil
+}
+
+func testerCanSwitch(phone, testerPhone string) bool {
+	return testerPhone != "" && phone == testerPhone
 }

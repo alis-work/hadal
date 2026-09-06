@@ -77,3 +77,13 @@ func TestRegistrationTransitionProtectsPermittedUsersAndAllowsRecruiterUpgrade(t
 		t.Fatal("admin registration must be rejected")
 	}
 }
+
+func TestTesterCanSwitchRoles(t *testing.T) {
+	const tester = "+447700900111"
+	if !testerCanSwitch(tester, tester) {
+		t.Fatal("configured tester should be able to switch roles")
+	}
+	if testerCanSwitch(tester, "") || testerCanSwitch("+447700900112", tester) {
+		t.Fatal("tester exception must not apply to an empty or different number")
+	}
+}

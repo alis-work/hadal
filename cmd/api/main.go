@@ -57,7 +57,7 @@ func main() {
 		logger.Error("redis connection failed", "error", err)
 		os.Exit(1)
 	}
-	senders := access.NewPostgresRepository(pool)
+	senders := access.NewPostgresRepository(pool, os.Getenv("WHATSAPP_TESTER_PHONE"))
 	service := transcription.NewService(transcription.NewPostgresRepository(pool, globalDailyLimit), transcription.NewRedisQueue(client), transcription.FileStorage{Directory: directory}, transcription.FFProbe{}, senders)
 	codes := access.RegistrationCodesFromEnvironment()
 	limiter := transcription.NewRedisRateLimiter(client)
