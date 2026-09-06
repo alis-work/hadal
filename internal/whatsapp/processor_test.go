@@ -248,8 +248,16 @@ func TestProcessorCompletesTextPolicyFailureWithUserReply(t *testing.T) {
 
 	_, err := processor.ProcessOne(context.Background())
 
-	if err != nil || repository.retriedIn || repository.completed == nil || !strings.Contains(repository.completed.Text, "today's message limit") {
+	if err != nil || repository.retriedIn || repository.completed == nil || repository.completed.Text != "You've used today's 10 translation requests. Your limit resets at midnight UTC." {
 		t.Fatalf("err=%v retried=%v outbound=%+v", err, repository.retriedIn, repository.completed)
+	}
+}
+
+func TestUserMessageExplainsRecruiterLimitDoesNotReset(t *testing.T) {
+	for _, err := range []error{transcription.ErrRecruiterQuota, translation.ErrRecruiterQuota} {
+		if message := userMessage(err); message != "You've used all 3 translation requests. This access does not reset." {
+			t.Errorf("error=%v message=%q", err, message)
+		}
 	}
 }
 

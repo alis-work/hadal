@@ -36,7 +36,7 @@ func TestOpenAIProviderRequestUsesStrictSchemaAndTranslationInstructions(t *test
 		t.Fatalf("unexpected payload: %+v", request)
 	}
 	prompt := request.Messages[0].Content
-	for _, phrase := range []string{"obvious spelling or grammar", "Preserve every fact", "tone", "do not guess", "clarification_question"} {
+	for _, phrase := range []string{"unsupported", "obvious spelling or grammar", "Preserve every fact", "tone", "do not guess", "clarification_question"} {
 		if !strings.Contains(prompt, phrase) {
 			t.Errorf("prompt omitted %q: %s", phrase, prompt)
 		}
@@ -88,6 +88,18 @@ func TestOpenAIProviderParsesClarificationWithoutInventingTranslation(t *testing
 	}
 }
 
+func TestOpenAIProviderRejectsUnsupportedLanguageWithoutTranslation(t *testing.T) {
+	provider, closeServer := testOpenAIProvider(t, http.StatusOK, `{"source_language":"unsupported","target_language":null,"translated_text":null,"interpreted_source":null,"clarification_required":false,"clarification_question":null}`)
+	defer closeServer()
+	result, err := provider.Translate(context.Background(), "Bonjour")
+	if err != nil || result.SourceLanguage != Unsupported || result.TargetLanguage != "" || result.TranslatedText != "" {
+		t.Fatalf("unexpected unsupported result: %+v, %v", result, err)
+	}
+	if FormatReply(result) != UnsupportedLanguageReply {
+		t.Fatalf("unexpected reply: %q", FormatReply(result))
+	}
+}
+
 func TestOpenAIProviderRejectsInvalidStructuredOutputPermanently(t *testing.T) {
 	tests := []string{
 		`{"source_language":"so","target_language":"so","translated_text":"x","interpreted_source":null,"clarification_required":false,"clarification_question":null}`,
@@ -95,6 +107,8 @@ func TestOpenAIProviderRejectsInvalidStructuredOutputPermanently(t *testing.T) {
 		`{"source_language":"so","target_language":"en","translated_text":"guess","interpreted_source":null,"clarification_required":true,"clarification_question":"Which?"}`,
 		`{"source_language":"so","target_language":"en","translated_text":"x","interpreted_source":null,"clarification_required":false,"clarification_question":null,"extra":true}`,
 		`{"source_language":"so","target_language":"en","translated_text":"x","clarification_required":false,"clarification_question":null}`,
+		`{"source_language":"unsupported","target_language":"en","translated_text":null,"interpreted_source":null,"clarification_required":false,"clarification_question":null}`,
+		`{"source_language":"unsupported","target_language":null,"translated_text":"Bonjour","interpreted_source":null,"clarification_required":false,"clarification_question":null}`,
 	}
 	for _, content := range tests {
 		provider, closeServer := testOpenAIProvider(t, http.StatusOK, content)

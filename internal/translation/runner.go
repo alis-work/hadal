@@ -98,6 +98,9 @@ func retryBackoff(attempt int) time.Duration {
 }
 
 func FormatReply(result Result) string {
+	if result.SourceLanguage == Unsupported {
+		return UnsupportedLanguageReply
+	}
 	if result.ClarificationRequired {
 		return *result.ClarificationQuestion
 	}

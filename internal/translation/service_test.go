@@ -162,6 +162,7 @@ func TestResultValidation(t *testing.T) {
 	valid := []Result{
 		{SourceLanguage: Somali, TargetLanguage: English, TranslatedText: "Hello"},
 		{SourceLanguage: English, TargetLanguage: Somali, ClarificationRequired: true, ClarificationQuestion: &question},
+		{SourceLanguage: Unsupported},
 	}
 	for _, result := range valid {
 		if err := result.Validate(); err != nil {
@@ -174,6 +175,8 @@ func TestResultValidation(t *testing.T) {
 		{SourceLanguage: Somali, TargetLanguage: English, TranslatedText: "x", ClarificationQuestion: &question},
 		{SourceLanguage: Somali, TargetLanguage: English, ClarificationRequired: true},
 		{SourceLanguage: Somali, TargetLanguage: English, TranslatedText: "x", InterpretedSource: &empty},
+		{SourceLanguage: Unsupported, TargetLanguage: English},
+		{SourceLanguage: Unsupported, TranslatedText: "Bonjour"},
 	}
 	for _, result := range invalid {
 		if !errors.Is(result.Validate(), ErrInvalidResult) {

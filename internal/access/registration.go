@@ -65,9 +65,9 @@ func PolicyFor(role Role) (AudioPolicy, bool) {
 func WelcomeMessage(role Role) (string, bool) {
 	switch role {
 	case PermittedUserRole:
-		return "Welcome to Hadal. You have full access. You can send up to 10 voice notes per day, each up to 30 seconds long, for transcription.", true
+		return "Welcome to Hadal. You have 10 translation requests per day across text and voice. Your limit resets at midnight UTC. Voice notes can be up to 30 seconds.", true
 	case RecruiterRole:
-		return "Welcome to Hadal. You have restricted access. You can send up to three voice notes, each up to 10 seconds long, for transcription. After your third voice note, your access will be permanently disabled.", true
+		return "Welcome to Hadal. You have 3 translation requests total across text and voice. This limit does not reset. Voice notes can be up to 10 seconds.", true
 	default:
 		return "", false
 	}

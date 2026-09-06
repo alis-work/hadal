@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 
-from worker.worker import GROUP, STREAM, TRANSCRIPTION_PROMPT, Job, OpenAITranscriber, OpenAITranslator, OpenAIValidator, TransientProviderError, TranslationResult, ValidationResult, Worker, format_result_reply
+from worker.worker import GROUP, STREAM, TRANSCRIPTION_PROMPT, UNSUPPORTED_LANGUAGE, UNSUPPORTED_LANGUAGE_REPLY, Job, OpenAITranscriber, OpenAITranslator, OpenAIValidator, TransientProviderError, TranslationResult, ValidationResult, Worker, format_result_reply
 
 
 class Repository:
@@ -78,8 +78,10 @@ class Validator:
     def __init__(self, result=None, error=None):
         self.result = result
         self.error = error
+        self.calls = []
 
     def validate(self, transcript, translation):
+        self.calls.append((transcript, translation))
         if self.error:
             raise self.error
         return self.result
@@ -88,6 +90,9 @@ class Validator:
 class WorkerTests(unittest.TestCase):
     def test_result_reply_formats_bilingual_result(self):
         self.assertEqual(format_result_reply("Salaan", "so", "en", "Hello"), "Hello")
+
+    def test_result_reply_rejects_unsupported_language(self):
+        self.assertEqual(format_result_reply("Bonjour", UNSUPPORTED_LANGUAGE, None, None), UNSUPPORTED_LANGUAGE_REPLY)
 
     def test_somali_classification_completes_with_english_translation(self):
         repo, client = Repository(Job("job-1", "/audio")), Client()
@@ -104,6 +109,15 @@ class WorkerTests(unittest.TestCase):
         Worker(repo, client, Transcriber("Hello"), translator, Validator(ValidationResult(True)), "test").process("1-0", {"transcription_id": "job-1"})
         self.assertEqual(repo.completed, [("job-1", "Hello", "en", "so", "Salaan")])
         self.assertEqual(translator.calls, ["Hello"])
+
+    def test_unsupported_language_completes_without_translation_or_validation(self):
+        repo, client = Repository(Job("job-1", "/audio")), Client()
+        validator = Validator(ValidationResult(True))
+        Worker(repo, client, Transcriber("Bonjour"), Translator(TranslationResult(UNSUPPORTED_LANGUAGE, None, None)), validator, "test").process("1-0", {"transcription_id": "job-1"})
+        self.assertEqual(repo.completed, [("job-1", "Bonjour", UNSUPPORTED_LANGUAGE, None, None)])
+        self.assertEqual(validator.calls, [])
+        self.assertEqual(repo.status, "COMPLETED")
+        self.assertEqual(client.acks, [(STREAM, GROUP, "1-0")])
 
     def test_failure_is_persisted_without_provider_error(self):
         repo, client = Repository(Job("job-1", "/audio")), Client()
@@ -202,6 +216,13 @@ class OpenAIClientTests(unittest.TestCase):
 
         with self.assertRaisesRegex(RuntimeError, "OpenAI translation request failed"):
             OpenAITranslator("test-key", "test-model", opener).translate("Salaan")
+
+    def test_translator_returns_unsupported_without_translation(self):
+        def opener(_, timeout):
+            return self.Response(b'{"choices":[{"message":{"content":"{\\"source_language\\":\\"unsupported\\",\\"target_language\\":null,\\"translated_text\\":null}"}}]}')
+
+        result = OpenAITranslator("test-key", "test-model", opener).translate("Bonjour")
+        self.assertEqual(result, TranslationResult(UNSUPPORTED_LANGUAGE, None, None))
 
     def test_validator_posts_structured_request_and_parses_correction(self):
         requests = []

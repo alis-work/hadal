@@ -30,11 +30,11 @@ func TestRoleForRejectsInvalidCodeOrConfiguration(t *testing.T) {
 
 func TestWelcomeMessage(t *testing.T) {
 	message, ok := WelcomeMessage(PermittedUserRole)
-	if !ok || message != "Welcome to Hadal. You have full access. You can send up to 10 voice notes per day, each up to 30 seconds long, for transcription." {
+	if !ok || message != "Welcome to Hadal. You have 10 translation requests per day across text and voice. Your limit resets at midnight UTC. Voice notes can be up to 30 seconds." {
 		t.Fatalf("unexpected permitted welcome message: %q", message)
 	}
 	message, ok = WelcomeMessage(RecruiterRole)
-	if !ok || message != "Welcome to Hadal. You have restricted access. You can send up to three voice notes, each up to 10 seconds long, for transcription. After your third voice note, your access will be permanently disabled." {
+	if !ok || message != "Welcome to Hadal. You have 3 translation requests total across text and voice. This limit does not reset. Voice notes can be up to 10 seconds." {
 		t.Fatalf("unexpected recruiter welcome message: %q", message)
 	}
 }

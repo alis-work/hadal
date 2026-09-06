@@ -11,7 +11,7 @@ import (
 	"strings"
 )
 
-const openAISystemPrompt = `You are Hadal's Somali-English translator. Detect whether the user's source text is Somali (so) or English (en), then target the opposite language. Translate the intended meaning naturally, correcting only obvious spelling or grammar issues needed to understand it. Preserve every fact, name, number, qualification, uncertainty, emphasis, and the speaker's tone; do not add explanations or information. interpreted_source may contain your minimally corrected understanding of the source when correction was needed, otherwise null. If the intended meaning is too ambiguous to translate safely, do not guess: set translated_text to null, clarification_required to true, and ask one concise clarification_question in the source language. Otherwise set clarification_required to false and clarification_question to null. Return only JSON matching the schema.`
+const openAISystemPrompt = `You are Hadal's Somali-English translator. Detect whether the user's source text is Somali (so), English (en), or unsupported. If it is not predominantly Somali or English, set source_language to unsupported and every nullable field to null; do not translate it or ask a clarification question. For Somali or English, target the opposite language and translate the intended meaning naturally, correcting only obvious spelling or grammar issues needed to understand it. Preserve every fact, name, number, qualification, uncertainty, emphasis, and the speaker's tone; do not add explanations or information. interpreted_source may contain your minimally corrected understanding of the source when correction was needed, otherwise null. If supported input is too ambiguous to translate safely, do not guess: set translated_text to null, clarification_required to true, and ask one concise clarification_question in the source language. Otherwise set clarification_required to false and clarification_question to null. Return only JSON matching the schema.`
 
 type HTTPClient interface {
 	Do(*http.Request) (*http.Response, error)
@@ -60,8 +60,8 @@ func translationSchema() map[string]any {
 	return map[string]any{
 		"type": "object",
 		"properties": map[string]any{
-			"source_language":        map[string]any{"type": "string", "enum": []string{Somali, English}},
-			"target_language":        map[string]any{"type": "string", "enum": []string{Somali, English}},
+			"source_language":        map[string]any{"type": "string", "enum": []string{Somali, English, Unsupported}},
+			"target_language":        map[string]any{"type": []string{"string", "null"}, "enum": []any{Somali, English, nil}},
 			"translated_text":        map[string]any{"type": []string{"string", "null"}},
 			"interpreted_source":     map[string]any{"type": []string{"string", "null"}},
 			"clarification_required": map[string]any{"type": "boolean"},
@@ -131,7 +131,7 @@ func (p *OpenAIProvider) Translate(ctx context.Context, source string) (Result, 
 
 type wireResult struct {
 	SourceLanguage        string  `json:"source_language"`
-	TargetLanguage        string  `json:"target_language"`
+	TargetLanguage        *string `json:"target_language"`
 	TranslatedText        *string `json:"translated_text"`
 	InterpretedSource     *string `json:"interpreted_source"`
 	ClarificationRequired bool    `json:"clarification_required"`
@@ -161,7 +161,10 @@ func decodeResult(content string) (Result, error) {
 	if err := ensureJSONEOF(decoder); err != nil {
 		return Result{}, err
 	}
-	result := Result{SourceLanguage: wire.SourceLanguage, TargetLanguage: wire.TargetLanguage, InterpretedSource: trimOptional(wire.InterpretedSource), ClarificationRequired: wire.ClarificationRequired, ClarificationQuestion: trimOptional(wire.ClarificationQuestion)}
+	result := Result{SourceLanguage: wire.SourceLanguage, InterpretedSource: trimOptional(wire.InterpretedSource), ClarificationRequired: wire.ClarificationRequired, ClarificationQuestion: trimOptional(wire.ClarificationQuestion)}
+	if target := trimOptional(wire.TargetLanguage); target != nil {
+		result.TargetLanguage = *target
+	}
 	if wire.TranslatedText != nil {
 		result.TranslatedText = strings.TrimSpace(*wire.TranslatedText)
 	}

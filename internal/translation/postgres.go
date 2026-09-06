@@ -176,7 +176,7 @@ func (r *PostgresRepository) Complete(ctx context.Context, id uuid.UUID, result 
 	var senderID, inboundID int64
 	var usageDate time.Time
 	var whatsappID, sender string
-	err = tx.QueryRow(ctx, `UPDATE text_translations SET status = 'COMPLETED', detected_language = $2, target_language = $3,
+	err = tx.QueryRow(ctx, `UPDATE text_translations SET status = 'COMPLETED', detected_language = $2, target_language = NULLIF($3, ''),
 		translated_text = NULLIF($4, ''), interpreted_source_text = $5, clarification_required = $6, clarification_question = $7,
 		next_attempt_at = NULL, completed_at = NOW(), updated_at = NOW()
 		WHERE id = $1 AND status = 'PROCESSING'

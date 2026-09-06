@@ -11,15 +11,17 @@ import (
 )
 
 const (
-	Somali  = "so"
-	English = "en"
+	Somali      = "so"
+	English     = "en"
+	Unsupported = "unsupported"
 
 	Pending    = "PENDING"
 	Processing = "PROCESSING"
 	Completed  = "COMPLETED"
 	Failed     = "FAILED"
 
-	MaxSourceBytes = 4096
+	MaxSourceBytes           = 4096
+	UnsupportedLanguageReply = "Hadal currently supports Somali and English only."
 )
 
 var (
@@ -49,6 +51,12 @@ type Result struct {
 }
 
 func (r Result) Validate() error {
+	if r.SourceLanguage == Unsupported {
+		if strings.TrimSpace(r.TargetLanguage) != "" || strings.TrimSpace(r.TranslatedText) != "" || r.InterpretedSource != nil || r.ClarificationRequired || r.ClarificationQuestion != nil {
+			return fmt.Errorf("%w: unsupported language must not include translation output", ErrInvalidResult)
+		}
+		return nil
+	}
 	if !validPair(r.SourceLanguage, r.TargetLanguage) {
 		return fmt.Errorf("%w: languages must be opposite Somali/English pairs", ErrInvalidResult)
 	}

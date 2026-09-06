@@ -268,11 +268,11 @@ func userMessage(err error) string {
 	case errors.Is(err, transcription.ErrSenderNotFound):
 		return "Register with your four-digit code before sending voice notes."
 	case errors.Is(err, transcription.ErrSenderDisabled), errors.Is(err, transcription.ErrRecruiterQuota):
-		return "Your voice-note access is disabled."
+		return "You've used all 3 translation requests. This access does not reset."
 	case errors.Is(err, transcription.ErrSenderAdmin):
 		return "Voice notes are not enabled for this account."
 	case errors.Is(err, transcription.ErrDailyQuota):
-		return "You have reached today's voice-note limit."
+		return "You've used today's 10 translation requests. Your limit resets at midnight UTC."
 	case errors.Is(err, transcription.ErrGlobalQuota):
 		return "Hadal has reached today's processing limit. Please try again tomorrow."
 	case errors.Is(err, transcription.ErrDurationProbe):
@@ -284,11 +284,11 @@ func userMessage(err error) string {
 	case errors.Is(err, translation.ErrSenderNotFound):
 		return "Register with your four-digit code before sending text."
 	case errors.Is(err, translation.ErrSenderDisabled), errors.Is(err, translation.ErrRecruiterQuota):
-		return "Your translation access is disabled."
+		return "You've used all 3 translation requests. This access does not reset."
 	case errors.Is(err, translation.ErrSenderAdmin):
 		return "Text translation is not enabled for this account."
 	case errors.Is(err, translation.ErrDailyQuota):
-		return "You have reached today's message limit."
+		return "You've used today's 10 translation requests. Your limit resets at midnight UTC."
 	case errors.Is(err, translation.ErrGlobalQuota):
 		return "Hadal has reached today's processing limit. Please try again tomorrow."
 	default:

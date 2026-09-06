@@ -12,10 +12,12 @@ from urllib import error, request
 
 STREAM = "transcription-jobs"
 GROUP = "transcription-workers"
+UNSUPPORTED_LANGUAGE = "unsupported"
+UNSUPPORTED_LANGUAGE_REPLY = "Hadal currently supports Somali and English only."
 TRANSCRIPTION_PROMPT = (
-    "The audio is spoken in English or Somali. Transcribe it verbatim in the language spoken. "
+    "The audio may be spoken in any language. Transcribe it verbatim in the language spoken. "
     "Do not translate, paraphrase, complete sentences, or infer words that are not audible. "
-    "Preserve names, repetitions, and uncertainty exactly when clear."
+    "Do not assume it is English or Somali. Preserve names, repetitions, and uncertainty exactly when clear."
 )
 
 
@@ -32,7 +34,7 @@ class TransientProviderError(RuntimeError):
 
 class Repository(Protocol):
     def claim(self, transcription_id: str) -> Job | None: ...
-    def complete(self, transcription_id: str, transcript: str, detected_language: str, target_language: str, translated_text: str) -> None: ...
+    def complete(self, transcription_id: str, transcript: str, detected_language: str, target_language: str | None, translated_text: str | None) -> None: ...
     def fail(self, transcription_id: str, reason: str) -> None: ...
     def retry(self, transcription_id: str, reason: str) -> None: ...
     def pending_ids(self) -> list[str]: ...
@@ -55,8 +57,8 @@ class Validator(Protocol):
 @dataclass
 class TranslationResult:
     source_language: str
-    target_language: str
-    translated_text: str
+    target_language: str | None
+    translated_text: str | None
 
 
 @dataclass
@@ -65,7 +67,9 @@ class ValidationResult:
     corrected_text: str | None = None
 
 
-def format_result_reply(transcript: str, detected_language: str, target_language: str, translated_text: str) -> str:
+def format_result_reply(transcript: str, detected_language: str, target_language: str | None, translated_text: str | None) -> str:
+    if detected_language == UNSUPPORTED_LANGUAGE:
+        return UNSUPPORTED_LANGUAGE_REPLY
     return translated_text
 
 
@@ -91,7 +95,7 @@ class PostgresRepository:
         self.connection.commit()
         return Job(*row) if row else None
 
-    def complete(self, transcription_id: str, transcript: str, detected_language: str, target_language: str, translated_text: str) -> None:
+    def complete(self, transcription_id: str, transcript: str, detected_language: str, target_language: str | None, translated_text: str | None) -> None:
         body = format_result_reply(transcript, detected_language, target_language, translated_text)
         with self.connection.transaction():
             with self.connection.cursor() as cursor:
@@ -278,7 +282,7 @@ class OpenAITranslator:
         body = {
             "model": self.model,
             "messages": [
-                {"role": "system", "content": "Detect whether the source text is Somali or English and translate it into the other language. Return only JSON matching the requested schema. source_language and target_language must be so or en, and must be opposite languages."},
+                {"role": "system", "content": "Detect whether the source text is Somali, English, or an unsupported language. For Somali or English, translate it into the opposite language. For any other language, set source_language to unsupported and both target_language and translated_text to null; do not translate it. Return only JSON matching the requested schema."},
                 {"role": "user", "content": text},
             ],
             "response_format": {
@@ -289,9 +293,9 @@ class OpenAITranslator:
                     "schema": {
                         "type": "object",
                         "properties": {
-                            "source_language": {"type": "string", "enum": ["so", "en"]},
-                            "target_language": {"type": "string", "enum": ["so", "en"]},
-                            "translated_text": {"type": "string"},
+                            "source_language": {"type": "string", "enum": ["so", "en", UNSUPPORTED_LANGUAGE]},
+                            "target_language": {"type": ["string", "null"], "enum": ["so", "en", None]},
+                            "translated_text": {"type": ["string", "null"]},
                         },
                         "required": ["source_language", "target_language", "translated_text"],
                         "additionalProperties": False,
@@ -315,6 +319,10 @@ class OpenAITranslator:
             source_language = result["source_language"]
             target_language = result["target_language"]
             translated_text = result["translated_text"]
+            if source_language == UNSUPPORTED_LANGUAGE:
+                if target_language is not None or translated_text is not None:
+                    raise ValueError
+                return TranslationResult(source_language, None, None)
             if (source_language, target_language) not in {("so", "en"), ("en", "so")} or not isinstance(translated_text, str) or not translated_text.strip():
                 raise ValueError
             return TranslationResult(source_language, target_language, translated_text.strip())
@@ -389,14 +397,17 @@ class Worker:
             if not transcript:
                 raise RuntimeError("empty transcript")
             result = self.translator.translate(transcript)
-            if (result.source_language, result.target_language) not in {("so", "en"), ("en", "so")}:
+            if result.source_language == UNSUPPORTED_LANGUAGE:
+                translated_text = None
+            elif (result.source_language, result.target_language) not in {("so", "en"), ("en", "so")}:
                 raise ValueError("unsupported detected language")
-            if not result.translated_text:
-                raise RuntimeError("empty translation")
-            validation = self.validator.validate(transcript, result)
-            if not validation.valid and not validation.corrected_text:
-                raise RuntimeError("translation validation failed")
-            translated_text = validation.corrected_text or result.translated_text
+            else:
+                if not result.translated_text:
+                    raise RuntimeError("empty translation")
+                validation = self.validator.validate(transcript, result)
+                if not validation.valid and not validation.corrected_text:
+                    raise RuntimeError("translation validation failed")
+                translated_text = validation.corrected_text or result.translated_text
             self.repository.complete(job.id, transcript, result.source_language, result.target_language, translated_text)
             try:
                 os.remove(job.storage_path)
