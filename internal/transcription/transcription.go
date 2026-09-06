@@ -17,6 +17,7 @@ var (
 	ErrSenderAdmin      = errors.New("administrator uploads are not enabled")
 	ErrDailyQuota       = errors.New("daily message limit reached")
 	ErrRecruiterQuota   = errors.New("recruiter message limit reached")
+	ErrGlobalQuota      = errors.New("global daily processing limit reached")
 )
 
 const (
@@ -28,6 +29,7 @@ const (
 
 type Record struct {
 	ID               uuid.UUID     `json:"id"`
+	InboundMessageID *int64        `json:"-"`
 	SenderID         *int64        `json:"sender_id,omitempty"`
 	ContentSHA256    string        `json:"-"`
 	OriginalFilename string        `json:"original_filename"`

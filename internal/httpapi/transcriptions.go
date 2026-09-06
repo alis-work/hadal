@@ -94,6 +94,8 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 			writeError(w, http.StatusBadRequest, "The audio exceeds your allowed duration.")
 		case errors.Is(err, transcription.ErrDailyQuota):
 			writeError(w, http.StatusTooManyRequests, "You have reached your daily message limit.")
+		case errors.Is(err, transcription.ErrGlobalQuota):
+			writeError(w, http.StatusServiceUnavailable, "Hadal has reached its daily processing limit.")
 		case errors.Is(err, transcription.ErrRecruiterQuota):
 			writeError(w, http.StatusForbidden, "You have reached your lifetime message limit.")
 		case errors.Is(err, transcription.ErrDurationProbe):

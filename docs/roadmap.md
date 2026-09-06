@@ -14,12 +14,12 @@ This is an MVP-first implementation plan. Each phase should be completed and ver
 
 ### 2. WhatsApp Intake and Protection
 
-- Integrate the official WhatsApp Business Cloud API webhook, including verification and inbound-message handling.
-- Bind four-digit registration-code redemption to the verified WhatsApp sender. The pre-WhatsApp development API uses a temporary required `X-Hadal-Sender` E.164 shim, which must be replaced by verified webhook identity. The code values remain runtime secrets.
+- Integrate the official WhatsApp Business Cloud API webhook, including verification and inbound-message handling. Signature verification, durable message intake, and voice-message dispatch are complete locally.
+- Bind four-digit registration-code redemption to the verified WhatsApp sender. WhatsApp registration is complete locally and classifies codes before persistence; the development upload API retains the temporary `X-Hadal-Sender` E.164 shim.
 - Implement allowlisted sender authorization before paid work.
 - Enforce permitted-user 30-second/10-per-day policy and recruiter 10-second/three-lifetime-then-disabled policy atomically before paid work.
-- Persist inbound-message identifiers and use them to make webhook handling idempotent.
-- Send basic non-media replies through WhatsApp to validate the integration boundary.
+- Persist inbound-message identifiers and use them to make webhook handling idempotent. Complete locally.
+- Send basic non-media replies through WhatsApp to validate the integration boundary. The durable outbox and Graph API adapter are complete; a live credential test remains.
 
 ### 3. Text Translation
 

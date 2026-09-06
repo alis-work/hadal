@@ -26,6 +26,14 @@ func NewService(repository Repository, queue Queue, storage Storage, prober Dura
 }
 
 func (s *Service) Submit(ctx context.Context, senderPhone string, source io.Reader, filename, contentType string) (Record, error) {
+	return s.submit(ctx, nil, senderPhone, source, filename, contentType)
+}
+
+func (s *Service) SubmitWhatsApp(ctx context.Context, inboundMessageID int64, senderPhone string, source io.Reader, filename, contentType string) (Record, error) {
+	return s.submit(ctx, &inboundMessageID, senderPhone, source, filename, contentType)
+}
+
+func (s *Service) submit(ctx context.Context, inboundMessageID *int64, senderPhone string, source io.Reader, filename, contentType string) (Record, error) {
 	sender, err := s.senders.Get(ctx, senderPhone)
 	if errors.Is(err, access.ErrSenderNotFound) {
 		return Record{}, ErrSenderNotFound
@@ -68,7 +76,7 @@ func (s *Service) Submit(ctx context.Context, senderPhone string, source io.Read
 		}
 		return Record{}, ErrAudioTooLong
 	}
-	item, inserted, err := s.repository.CreateOrGetAccepted(ctx, Record{ID: uuid.New(), SenderID: &sender.ID, ContentSHA256: stored.SHA256, OriginalFilename: filepath.Base(filename), ContentType: normalizedType, ByteSize: stored.Size, AudioDuration: duration, StoragePath: stored.Path})
+	item, inserted, err := s.repository.CreateOrGetAccepted(ctx, Record{ID: uuid.New(), InboundMessageID: inboundMessageID, SenderID: &sender.ID, ContentSHA256: stored.SHA256, OriginalFilename: filepath.Base(filename), ContentType: normalizedType, ByteSize: stored.Size, AudioDuration: duration, StoragePath: stored.Path})
 	if err != nil {
 		if stored.Created {
 			_ = s.storage.Delete(ctx, stored.Path)

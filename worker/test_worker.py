@@ -3,7 +3,7 @@ import os
 import tempfile
 import unittest
 
-from worker.worker import GROUP, STREAM, Job, OpenAITranscriber, OpenAITranslator, OpenAIValidator, TranslationResult, ValidationResult, Worker
+from worker.worker import GROUP, STREAM, Job, OpenAITranscriber, OpenAITranslator, OpenAIValidator, TransientProviderError, TranslationResult, ValidationResult, Worker, format_result_reply
 
 
 class Repository:
@@ -12,6 +12,7 @@ class Repository:
         self.status = status
         self.completed = []
         self.failed = []
+        self.retried = []
 
     def claim(self, _):
         if self.status != "PENDING":
@@ -27,10 +28,17 @@ class Repository:
         self.failed.append((job_id, reason))
         self.status = "FAILED"
 
+    def retry(self, job_id, reason):
+        self.retried.append((job_id, reason))
+        self.status = "PENDING"
+
     def pending_ids(self):
         return []
 
     def recover_stalled(self):
+        pass
+
+    def fail_exhausted(self):
         pass
 
 
@@ -78,6 +86,13 @@ class Validator:
 
 
 class WorkerTests(unittest.TestCase):
+    def test_result_reply_formats_bilingual_result(self):
+        self.assertEqual(
+            format_result_reply("Salaan", "so", "en", "Hello"),
+            "Source transcript:\nSalaan\n\nDetected language: Somali (so)\n"
+            "Target language: English (en)\n\nTranslation:\nHello",
+        )
+
     def test_somali_classification_completes_with_english_translation(self):
         repo, client = Repository(Job("job-1", "/audio")), Client()
         translator = Translator(TranslationResult("so", "en", "Hello"))
@@ -99,6 +114,13 @@ class WorkerTests(unittest.TestCase):
         Worker(repo, client, Transcriber(error=RuntimeError("sensitive provider detail")), Translator(), Validator(), "test").process("1-0", {"transcription_id": "job-1"})
         self.assertEqual(repo.failed, [("job-1", "audio processing failed")])
         self.assertEqual(repo.status, "FAILED")
+        self.assertEqual(client.acks, [(STREAM, GROUP, "1-0")])
+
+    def test_transient_provider_failure_is_retried(self):
+        repo, client = Repository(Job("job-1", "/audio", attempts=1)), Client()
+        Worker(repo, client, Transcriber(error=TransientProviderError("temporary")), Translator(), Validator(), "test", max_attempts=3).process("1-0", {"transcription_id": "job-1"})
+        self.assertEqual(repo.retried, [("job-1", "provider temporarily unavailable")])
+        self.assertEqual(repo.failed, [])
         self.assertEqual(client.acks, [(STREAM, GROUP, "1-0")])
 
     def test_unsupported_translation_classification_fails(self):

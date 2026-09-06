@@ -12,10 +12,17 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type PostgresRepository struct{ pool *pgxpool.Pool }
+type PostgresRepository struct {
+	pool             *pgxpool.Pool
+	globalDailyLimit int
+}
 
-func NewPostgresRepository(pool *pgxpool.Pool) *PostgresRepository {
-	return &PostgresRepository{pool: pool}
+func NewPostgresRepository(pool *pgxpool.Pool, globalDailyLimit ...int) *PostgresRepository {
+	limit := 100
+	if len(globalDailyLimit) > 0 && globalDailyLimit[0] > 0 {
+		limit = globalDailyLimit[0]
+	}
+	return &PostgresRepository{pool: pool, globalDailyLimit: limit}
 }
 
 const recordColumns = `id, sender_id, content_sha256, original_filename, content_type, byte_size, audio_duration_seconds, storage_path, language, status, transcript, detected_language, target_language, translated_text, failure_reason, created_at, updated_at, processing_started_at, completed_at`
@@ -64,10 +71,21 @@ func (r *PostgresRepository) CreateOrGetAccepted(ctx context.Context, item Recor
 	var existing Record
 	existing, existingErr := scanRecord(tx.QueryRow(ctx, `SELECT `+recordColumns+` FROM transcriptions WHERE sender_id = $1 AND content_sha256 = $2`, senderID, item.ContentSHA256))
 	if existingErr == nil {
+		if err := linkInbound(ctx, tx, item.InboundMessageID, existing.ID); err != nil {
+			return Record{}, false, err
+		}
 		return existing, false, tx.Commit(ctx)
 	}
 	if !errors.Is(existingErr, pgx.ErrNoRows) && !errors.Is(existingErr, ErrNotFound) {
 		return Record{}, false, existingErr
+	}
+	var globalReserved int
+	err = tx.QueryRow(ctx, `INSERT INTO global_quota_usage (usage_date, reserved_requests) VALUES (CURRENT_DATE, 1) ON CONFLICT (usage_date) DO UPDATE SET reserved_requests = global_quota_usage.reserved_requests + 1, updated_at = NOW() WHERE global_quota_usage.reserved_requests < $1 RETURNING reserved_requests`, r.globalDailyLimit).Scan(&globalReserved)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Record{}, false, ErrGlobalQuota
+	}
+	if err != nil {
+		return Record{}, false, err
 	}
 	if role == access.PermittedUserRole {
 		var reserved int
@@ -93,10 +111,27 @@ func (r *PostgresRepository) CreateOrGetAccepted(ctx context.Context, item Recor
 	if err != nil {
 		return Record{}, false, err
 	}
+	if err := linkInbound(ctx, tx, item.InboundMessageID, output.ID); err != nil {
+		return Record{}, false, err
+	}
 	if err := tx.Commit(ctx); err != nil {
 		return Record{}, false, err
 	}
 	return output, true, nil
+}
+
+func linkInbound(ctx context.Context, tx pgx.Tx, inboundID *int64, transcriptionID uuid.UUID) error {
+	if inboundID == nil {
+		return nil
+	}
+	result, err := tx.Exec(ctx, `UPDATE whatsapp_inbound_messages SET transcription_id = $2, updated_at = NOW() WHERE id = $1 AND status = 'PROCESSING'`, *inboundID, transcriptionID)
+	if err != nil {
+		return err
+	}
+	if result.RowsAffected() != 1 {
+		return errors.New("inbound whatsapp message was not processing")
+	}
+	return nil
 }
 
 func (r *PostgresRepository) Get(ctx context.Context, id uuid.UUID) (Record, error) {

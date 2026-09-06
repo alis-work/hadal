@@ -18,6 +18,7 @@ secrets.yml
 
 # Local data and uploaded media
 data/
+audio/
 media/
 uploads/
 storage/
